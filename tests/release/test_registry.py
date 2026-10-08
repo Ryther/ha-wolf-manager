@@ -1,10 +1,29 @@
 """Simulated distribution API proves byte-preserving publisher behavior."""
 import unittest
+from unittest.mock import patch, MagicMock
+import urllib.parse
 from scripts.ci import registry as r, verify_candidate as v
 from test_candidate import fixture, encoded
 
 
 class RegistryTests(unittest.TestCase):
+    def test_bearer_scope_matches_exact_lowercase_oci_repository(self):
+        response = MagicMock()
+        response.__enter__.return_value = response
+        response.read.return_value = b'{"token":"synthetic-bearer"}'
+        opener = MagicMock(); opener.open.return_value = response
+        with patch.object(r.urllib.request, 'build_opener', return_value=opener):
+            registry = r.Registry('Ryther', 'synthetic-test-only')
+        request = opener.open.call_args.args[0]
+        url = urllib.parse.urlsplit(request.full_url)
+        self.assertEqual(url.scheme, 'https')
+        self.assertEqual(url.netloc, 'ghcr.io')
+        self.assertEqual(url.path, '/token')
+        query = urllib.parse.parse_qs(url.query)
+        self.assertEqual(query['scope'], ['repository:ryther/ha-wolf-manager:pull,push'])
+        self.assertEqual(query['service'], ['ghcr.io'])
+        self.assertEqual(registry.token, 'synthetic-bearer')
+
     def test_transfer_preserves_raw_manifest_and_layer_bytes_and_refuses_tag_rebind(self):
         files, _, _, _, receipt = fixture()
         image = receipt['image']; calls = []; stored = {}; manifests = {}
