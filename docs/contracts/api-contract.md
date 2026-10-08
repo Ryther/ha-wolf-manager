@@ -68,3 +68,9 @@ Reconciliation responses include each child request_id/kind/dispatch_phase/verif
 ## Verified stage-only completion
 
 If staging is independently verified succeeded and the planned primary child remains durably not_dispatched, reconciliation terminates the parent as failed with code primary_not_dispatched and explicit stage_succeeded evidence. Desired/staged revision is visible, running revision remains the observed prior value. This is verified partial execution, never parent success or non-execution. No replay occurs; a subsequent explicit user action is a new operation after reconciliation. Any other possibly dispatched child must be terminally evidenced first; otherwise the parent remains unknown_interrupted. Test the crash after stage acknowledgment but before primary sending is committed.
+
+## Read-response DTO completion
+
+All timestamps are integer Unix milliseconds. Settings GET returns `{settings: Settings, desired_revision: string, staged_revision: string|null, running_revision: string|null}`. Status GET returns `{status: HostStatus, capabilities: HostCapabilities, availability: "online"|"offline"|"unknown", observed_at: integer}`; no observation still returns 503. Parameters GET returns `{parameters: {parameter_id: ParameterDefinition}}`. Operation pages return `{operations: [Operation], next_cursor: string|null}`. Operation timestamps use `submitted_at`, `started_at`, `completed_at` (last two nullable), with the already frozen fields above. These wrappers complete existing route shapes without changing product behavior or authority.
+
+Games GET returns `{games: [CatalogAttributes], catalog_generation: integer, observed_at: integer, availability: "online"|"offline"|"unknown"}`; desired choices are from `settings.games[app_id]`, with shared defaults for absent settings.

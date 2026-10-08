@@ -1,6 +1,31 @@
 //! Guarded, recoverable configuration writes inside a pinned filesystem grant.
 //! Backups remain until an operator explicitly archives them; restore refuses drift.
 use fs2::FileExt;
+use std::collections::BTreeMap;
+type Attributes = BTreeMap<String, Vec<u8>>;
+fn attributes(file: &File) -> io::Result<Attributes> {
+    let mut names = vec![0u8; 65536];
+    let length = match rustix::fs::flistxattr(file, &mut names[..]) {
+        Ok(length) => length,
+        Err(e) if e == rustix::io::Errno::OPNOTSUPP => return Ok(BTreeMap::new()),
+        Err(e) => return Err(e.into()),
+    };
+    let mut result = BTreeMap::new();
+    let mut total = 0usize;
+    for name in names[..length].split(|b| *b == 0).filter(|n| !n.is_empty()) {
+        let name =
+            std::str::from_utf8(name).map_err(|_| error("non-UTF8 extended attribute name"))?;
+        let mut value = vec![0u8; 65536];
+        let length = rustix::fs::fgetxattr(file, name, &mut value[..])?;
+        value.truncate(length);
+        total += name.len() + value.len();
+        if total > 1024 * 1024 {
+            return Err(error("extended attributes exceed bound"));
+        }
+        result.insert(name.to_owned(), value);
+    }
+    Ok(result)
+}
 use rustix::fs::{Mode, OFlags, RenameFlags, ResolveFlags};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -109,7 +134,11 @@ impl Grant {
             .to_owned();
         Ok((directory, name))
     }
-    fn read_file(&self, parent: &File, name: &str) -> io::Result<(Vec<u8>, fs::Metadata)> {
+    fn read_file(
+        &self,
+        parent: &File,
+        name: &str,
+    ) -> io::Result<(Vec<u8>, fs::Metadata, Attributes)> {
         let file = File::from(rustix::fs::openat2(
             parent,
             name,
@@ -126,9 +155,17 @@ impl Grant {
         {
             return Err(error("target ownership, links or file type are unsafe"));
         }
-        Ok((read_bounded(file)?, metadata))
+        let attrs = attributes(&file)?;
+        Ok((read_bounded(file)?, metadata, attrs))
     }
-    fn write_new(&self, parent: &File, name: &str, bytes: &[u8], mode: u32) -> io::Result<()> {
+    fn write_new(
+        &self,
+        parent: &File,
+        name: &str,
+        bytes: &[u8],
+        mode: u32,
+        attrs: &Attributes,
+    ) -> io::Result<()> {
         let mut file = File::from(rustix::fs::openat(
             parent,
             name,
@@ -142,6 +179,19 @@ impl Grant {
             Some(rustix::fs::Gid::from_raw(self.gid)),
         )?;
         file.set_permissions(fs::Permissions::from_mode(mode & 0o777))?;
+        // Copy ACLs and security labels before replacing any existing target.
+        for name in attributes(&file)?
+            .keys()
+            .filter(|name| !attrs.contains_key(*name))
+        {
+            rustix::fs::fremovexattr(&file, name.as_str())?;
+        }
+        for (name, value) in attrs {
+            rustix::fs::fsetxattr(&file, name.as_str(), value, rustix::fs::XattrFlags::empty())?;
+        }
+        if attributes(&file)? != *attrs || file.metadata()?.mode() & 0o777 != mode & 0o777 {
+            return Err(error("extended attributes or mode could not be preserved"));
+        }
         file.sync_all()?;
         parent.sync_all()
     }
@@ -165,6 +215,9 @@ struct Manifest {
     root: PathBuf,
     root_device: u64,
     root_inode: u64,
+    parent_device: u64,
+    parent_inode: u64,
+    attributes: Attributes,
     relative: String,
     uid: u32,
     gid: u32,
@@ -173,6 +226,20 @@ struct Manifest {
     postimage_sha256: String,
     quarantine: String,
     phase: Phase,
+}
+impl Manifest {
+    fn matches(&self, snapshot: &(Vec<u8>, fs::Metadata, Attributes), hash: &str) -> bool {
+        digest(&snapshot.0) == hash
+            && snapshot.1.uid() == self.uid
+            && snapshot.1.gid() == self.gid
+            && snapshot.1.mode() & 0o777 == self.mode
+            && snapshot.2 == self.attributes
+    }
+    fn parent_matches(&self, grant: &Grant) -> io::Result<bool> {
+        let (parent, _) = grant.parent(&self.relative)?;
+        let metadata = parent.metadata()?;
+        Ok(metadata.dev() == self.parent_device && metadata.ino() == self.parent_inode)
+    }
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -320,7 +387,8 @@ impl TransactionStore {
             return Err(error("unresolved recovery or oversized data"));
         }
         let (parent, name) = grant.parent(relative)?;
-        let (before, metadata) = grant.read_file(&parent, &name)?;
+        let (before, metadata, attrs) = grant.read_file(&parent, &name)?;
+        let parent_metadata = parent.metadata()?;
         for id in self.transactions()? {
             let previous = self.load(&id)?;
             if previous.root == grant.root
@@ -347,6 +415,9 @@ impl TransactionStore {
             root: grant.root.clone(),
             root_device: grant.device,
             root_inode: grant.inode,
+            parent_device: parent_metadata.dev(),
+            parent_inode: parent_metadata.ino(),
+            attributes: attrs,
             relative: relative.to_owned(),
             uid: metadata.uid(),
             gid: metadata.gid(),
@@ -359,7 +430,12 @@ impl TransactionStore {
         self.save(&manifest)?;
         self.preimage(&id)?;
         let staged = format!(".wolf-manager-{id}.staged");
-        grant.write_new(&parent, &staged, bytes, manifest.mode)?;
+        grant.write_new(&parent, &staged, bytes, manifest.mode, &manifest.attributes)?;
+        if !manifest.parent_matches(grant)? {
+            manifest.phase = Phase::Conflict;
+            self.save(&manifest)?;
+            return Err(error("target parent identity changed before application"));
+        }
         rustix::fs::renameat_with(
             &parent,
             &name,
@@ -370,7 +446,10 @@ impl TransactionStore {
         parent.sync_all()?;
         manifest.phase = Phase::Quarantined;
         self.save(&manifest)?;
-        if digest(&grant.read_file(&parent, &manifest.quarantine)?.0) != manifest.preimage_sha256 {
+        if !manifest.matches(
+            &grant.read_file(&parent, &manifest.quarantine)?,
+            &manifest.preimage_sha256,
+        ) {
             let _ = rustix::fs::renameat_with(
                 &parent,
                 &manifest.quarantine,
@@ -388,6 +467,11 @@ impl TransactionStore {
         // NOREPLACE never overwrites a file introduced by another writer.
         rustix::fs::renameat_with(&parent, &staged, &parent, &name, RenameFlags::NOREPLACE)?;
         parent.sync_all()?;
+        if !manifest.parent_matches(grant)? {
+            manifest.phase = Phase::Conflict;
+            self.save(&manifest)?;
+            return Err(error("target parent identity changed during application"));
+        }
         manifest.phase = Phase::Applied;
         self.save(&manifest)?;
         Ok(id)
@@ -411,10 +495,22 @@ impl TransactionStore {
                 return Err(reason);
             }
         };
-        let (parent, name) = grant.parent(&manifest.relative)?;
+        let (parent, name) = match grant.parent(&manifest.relative) {
+            Ok(value) => value,
+            Err(reason) => {
+                manifest.phase = Phase::Conflict;
+                self.save(&manifest)?;
+                return Err(reason);
+            }
+        };
+        if !manifest.parent_matches(grant)? {
+            manifest.phase = Phase::Conflict;
+            self.save(&manifest)?;
+            return Err(error("target parent identity changed; refusing restore"));
+        }
         let current = grant.read_file(&parent, &name);
-        if let Ok((bytes, _)) = &current
-            && digest(bytes) == manifest.preimage_sha256
+        if let Ok(snapshot) = &current
+            && manifest.matches(snapshot, &manifest.preimage_sha256)
         {
             manifest.phase = Phase::Restored;
             self.save(&manifest)?;
@@ -427,7 +523,7 @@ impl TransactionStore {
         let valid_postimage = current
             .as_ref()
             .ok()
-            .is_some_and(|(bytes, _)| digest(bytes) == manifest.postimage_sha256);
+            .is_some_and(|snapshot| manifest.matches(snapshot, &manifest.postimage_sha256));
         if !missing && !valid_postimage {
             manifest.phase = Phase::Conflict;
             self.save(&manifest)?;
@@ -450,12 +546,21 @@ impl TransactionStore {
         manifest.phase = Phase::Restoring;
         self.save(&manifest)?;
         let staged = format!(".wolf-manager-{id}.restore-{}", Uuid::new_v4());
-        grant.write_new(&parent, &staged, &before, manifest.mode)?;
+        grant.write_new(
+            &parent,
+            &staged,
+            &before,
+            manifest.mode,
+            &manifest.attributes,
+        )?;
         if valid_postimage {
             let displaced = format!(".wolf-manager-{id}.postimage-{}", Uuid::new_v4());
             rustix::fs::renameat_with(&parent, &name, &parent, &displaced, RenameFlags::NOREPLACE)?;
             parent.sync_all()?;
-            if digest(&grant.read_file(&parent, &displaced)?.0) != manifest.postimage_sha256 {
+            if !manifest.matches(
+                &grant.read_file(&parent, &displaced)?,
+                &manifest.postimage_sha256,
+            ) {
                 let _ = rustix::fs::renameat_with(
                     &parent,
                     &displaced,
@@ -473,8 +578,13 @@ impl TransactionStore {
         }
         rustix::fs::renameat_with(&parent, &staged, &parent, &name, RenameFlags::NOREPLACE)?;
         parent.sync_all()?;
-        if digest(&grant.read_file(&parent, &name)?.0) != manifest.preimage_sha256 {
+        if !manifest.matches(&grant.read_file(&parent, &name)?, &manifest.preimage_sha256) {
             return Err(error("restore verification failed"));
+        }
+        if !manifest.parent_matches(grant)? {
+            manifest.phase = Phase::Conflict;
+            self.save(&manifest)?;
+            return Err(error("target parent identity changed during restore"));
         }
         manifest.phase = Phase::Restored;
         self.save(&manifest)
