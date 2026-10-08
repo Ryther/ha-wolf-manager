@@ -749,7 +749,7 @@ impl ManagerMqtt {
             status.container_state.as_str(),
         ) {
             ("active", "running") => Some("ON"),
-            ("inactive", "stopped" | "exited" | "absent" | "not_found") => Some("OFF"),
+            ("inactive", "stopped" | "exited" | "absent" | "not_found" | "missing") => Some("OFF"),
             _ => None,
         };
         let attributes = canonical_json(
@@ -1059,6 +1059,99 @@ impl ManagerMqtt {
                 Ok(None)
             }
             _ => Ok(None),
+        }
+    }
+}
+
+#[cfg(test)]
+mod stopped_service_tests {
+    use super::*;
+    fn projection(systemd_state: &str, container_state: &str) -> (ManagerMqtt, PcId) {
+        let pc = PcId::new("stopped-test-pc").unwrap();
+        let topics = Topics::new(
+            "wolf-test/stopped-service",
+            "wolf-test/stopped-service/discovery",
+        )
+        .unwrap();
+        let mut mqtt = ManagerMqtt::new(
+            BrokerConfig {
+                host: "127.0.0.1".into(),
+                port: 1,
+                username: None,
+                password: None,
+                tls: false,
+            },
+            topics,
+            uuid::Uuid::new_v4(),
+            vec![Registration {
+                pc_id: pc.clone(),
+                display_name: "Stopped test PC".into(),
+            }],
+        )
+        .unwrap();
+        mqtt.observe_service(
+            &pc,
+            &HostStatus {
+                systemd_state: systemd_state.into(),
+                container_state: container_state.into(),
+                restart_count: 0,
+                exit_code: None,
+                staged_revision: None,
+                running_revision: None,
+                recovery_pending: false,
+            },
+            100,
+            None,
+        )
+        .unwrap();
+        (mqtt, pc)
+    }
+    #[tokio::test]
+    async fn confirmed_inactive_missing_container_publishes_retained_off_and_remains_controllable()
+    {
+        // Actual Docker inspect absence is reported by the host as "missing".
+        // An intentionally stopped PC must stay available for the voice ON command.
+        let (mqtt, pc) = projection("inactive", "missing");
+        for (topic, payload) in [
+            (mqtt.topics.service_state(&pc), b"OFF".as_slice()),
+            (mqtt.topics.service_availability(&pc), b"online".as_slice()),
+        ] {
+            let publication = mqtt
+                .outbox
+                .iter()
+                .rev()
+                .find(|p| p.topic == topic)
+                .expect("confirmed stopped state must be published");
+            assert_eq!(publication.payload, payload);
+            assert!(publication.retain);
+        }
+        assert!(mqtt.observations[&pc].available);
+    }
+    #[tokio::test]
+    async fn missing_container_without_confirmed_inactive_service_is_not_reported_off() {
+        for (systemd, container) in [
+            ("active", "missing"),
+            ("failed", "missing"),
+            ("unknown", "missing"),
+            ("inactive", "unknown"),
+            ("inactive", "error"),
+        ] {
+            let (mqtt, pc) = projection(systemd, container);
+            assert!(
+                !mqtt
+                    .outbox
+                    .iter()
+                    .any(|p| p.topic == mqtt.topics.service_state(&pc))
+            );
+            let publication = mqtt
+                .outbox
+                .iter()
+                .rev()
+                .find(|p| p.topic == mqtt.topics.service_availability(&pc))
+                .unwrap();
+            assert_eq!(publication.payload, b"offline");
+            assert!(publication.retain);
+            assert!(!mqtt.observations[&pc].available);
         }
     }
 }

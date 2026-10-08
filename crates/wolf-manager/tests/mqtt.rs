@@ -532,3 +532,93 @@ async fn broker_restart_replays_durable_archived_scope_cleanup() {
     .await
     .expect("restart forgot durable archive cleanup");
 }
+
+#[tokio::test]
+#[ignore = "requires disposable MQTT5 broker via WOLF_TEST_MQTT_HOST/PORT"]
+async fn broker_retains_confirmed_compose_down_off_state_and_control_availability() {
+    let host = std::env::var("WOLF_TEST_MQTT_HOST").expect("explicit disposable broker host");
+    let port = std::env::var("WOLF_TEST_MQTT_PORT")
+        .unwrap()
+        .parse()
+        .unwrap();
+    let base = format!("wolf-test/{}", uuid::Uuid::new_v4());
+    let topics = Topics::new(&base, &format!("{base}/discovery")).unwrap();
+    let mut observer = peer(&host, port, &base).await;
+    let mut manager = ManagerMqtt::new(
+        BrokerConfig {
+            host: host.clone(),
+            port,
+            username: None,
+            password: None,
+            tls: false,
+        },
+        topics.clone(),
+        uuid::Uuid::new_v4(),
+        vec![Registration {
+            pc_id: pc(),
+            display_name: "Stopped PC".into(),
+        }],
+    )
+    .unwrap();
+    ready(&mut manager).await;
+    manager
+        .observe_service(
+            &pc(),
+            &HostStatus {
+                systemd_state: "inactive".into(),
+                container_state: "missing".into(),
+                restart_count: 0,
+                exit_code: None,
+                staged_revision: None,
+                running_revision: None,
+                recovery_pending: false,
+            },
+            100,
+            None,
+        )
+        .unwrap();
+    let state_topic = topics.service_state(&pc());
+    let availability_topic = topics.service_availability(&pc());
+    tokio::time::timeout(Duration::from_secs(3),async {
+        let (mut off,mut available)=(false,false);
+        while !(off && available) {
+            tokio::select! {
+                event=manager.poll()=>{event.unwrap();},
+                event=observer.events.recv()=>{
+                    if let Some(Event::Incoming(Packet::Publish(p)))=event {
+                        off|=p.topic.as_ref()==state_topic.as_bytes() && p.payload.as_ref()==b"OFF";
+                        available|=p.topic.as_ref()==availability_topic.as_bytes() && p.payload.as_ref()==b"online";
+                    }
+                }
+            }
+        }
+    }).await.unwrap();
+    // A fresh HA subscription must recover both values from broker retention,
+    // without a new host command or a new service observation.
+    let mut restarted_ha = peer(&host, port, &base).await;
+    tokio::time::timeout(Duration::from_secs(3), async {
+        let (mut off, mut available) = (false, false);
+        while !(off && available) {
+            match restarted_ha.events.recv().await {
+                Some(Event::Incoming(Packet::Publish(p)))
+                    if p.topic.as_ref() == state_topic.as_bytes() =>
+                {
+                    assert!(p.retain);
+                    assert_eq!(p.payload.as_ref(), b"OFF");
+                    off = true;
+                }
+                Some(Event::Incoming(Packet::Publish(p)))
+                    if p.topic.as_ref() == availability_topic.as_bytes() =>
+                {
+                    assert!(p.retain);
+                    assert_eq!(p.payload.as_ref(), b"online");
+                    available = true;
+                }
+                Some(_) => {}
+                None => panic!("fresh observer disconnected"),
+            }
+        }
+    })
+    .await
+    .unwrap();
+}
