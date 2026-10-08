@@ -167,8 +167,29 @@ impl Store {
         self.root.verify()?;
         time(now)?;
         input.validate()?;
+        let count: i64 = self
+            .conn
+            .query_row(
+                "SELECT count(*) FROM pcs WHERE archived_at_ms IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(internal)?;
+        if count >= 1000 {
+            return Err(SafeError::new("payload_too_large"));
+        }
         self.conn.execute("INSERT INTO pcs(pc_id,display_name,ssh_host,ssh_port,ssh_user,created_at_ms,updated_at_ms) VALUES(?1,?2,?3,?4,?5,?6,?6)",params![input.pc_id.as_str(),input.display_name,input.ssh_host,input.ssh_port,input.ssh_user,now]).map_err(internal)?;
         Ok(())
+    }
+    pub fn archived_pc_ids(&self) -> Result<Vec<PcId>, SafeError> {
+        self.root.verify()?;
+        self.conn
+            .prepare("SELECT pc_id FROM pcs WHERE archived_at_ms IS NOT NULL ORDER BY pc_id")
+            .map_err(internal)?
+            .query_map([], |r| r.get::<_, String>(0))
+            .map_err(internal)?
+            .map(|r| PcId::new(r.map_err(internal)?))
+            .collect()
     }
     pub fn pcs(&self) -> Result<Vec<Pc>, SafeError> {
         self.root.verify()?;

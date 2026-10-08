@@ -58,6 +58,13 @@ impl Store {
             None => Ok(()),
         }
     }
+    pub fn active_mutation(&self, pc: &PcId) -> Result<Option<Uuid>, SafeError> {
+        self.root.verify()?;
+        ensure_pc(&self.conn, pc)?;
+        let id:Option<String>=self.conn.query_row("SELECT operation_id FROM operations WHERE pc_id=?1 AND state IN ('queued','running','unknown_interrupted') AND kind IN ('apply_settings','start','stop','restart') ORDER BY submitted_at_ms LIMIT 1",[pc.as_str()],|r|r.get(0)).optional().map_err(internal)?;
+        id.map(|id| Uuid::parse_str(&id).map_err(internal))
+            .transpose()
+    }
     pub fn enqueue_operation(
         &mut self,
         pc: &PcId,
@@ -213,6 +220,13 @@ impl Store {
                 .as_bytes(),
         )?;
         response.validate_for(&request)?;
+        if response
+            .error
+            .as_ref()
+            .is_some_and(|e| e.code() == ErrorCode::UnknownInterrupted)
+        {
+            return Err(SafeError::new("unknown_interrupted"));
+        }
         let mut result = response.result.clone();
         if canonical_json(response)?.len() > 65536 {
             if matches!(result, Some(RpcResult::Logs { .. })) {
@@ -241,6 +255,29 @@ impl Store {
         observation.validate()?;
         self.conn.execute("UPDATE operation_rpc_requests SET dispatch_phase='sent',observed_phase=?1,safe_result=?2,resolution_json=?3,updated_at_ms=?4 WHERE request_id=?5",params![if response.ok{"succeeded"}else{"failed"},encode(&result)?,encode(&observation)?,now,id.to_string()]).map_err(internal)?;
         Ok(())
+    }
+    pub fn operation_evidence(&self, id: Uuid) -> Result<Vec<serde_json::Value>, SafeError> {
+        self.root.verify()?;
+        let children = self.operation_children(id)?;
+        let mut output = Vec::new();
+        for child in children {
+            let json: Option<String> = self
+                .conn
+                .query_row(
+                    "SELECT resolution_json FROM operation_rpc_requests WHERE request_id=?1",
+                    [child.request_id.to_string()],
+                    |r| r.get(0),
+                )
+                .map_err(internal)?;
+            let journal = json
+                .map(|j| serde_json::from_str::<JournalObservation>(&j).map_err(internal))
+                .transpose()?;
+            let verified = journal
+                .as_ref()
+                .map(|j| serde_json::json!({"found":j.found,"phase":j.phase,"error":j.error}));
+            output.push(serde_json::json!({"request_id":child.request_id,"pc_id":child.pc_id,"kind":child.kind,"ordinal":child.ordinal,"dispatch_phase":child.dispatch_phase,"verified_outcome":verified}));
+        }
+        Ok(output)
     }
     /// Reconciliation is read-only remotely and only admitted for interrupted work.
     pub fn reconcile_operation(
@@ -294,12 +331,25 @@ impl Store {
         ) {
             return Err(SafeError::validation());
         }
-        let encoded = encode(observations)?;
+        let stored = observations
+            .iter()
+            .cloned()
+            .map(|mut observation| {
+                if matches!(observation.result.as_deref(), Some(RpcResult::Logs { .. })) {
+                    observation.result = Some(Box::new(RpcResult::Logs {
+                        lines: Vec::new(),
+                        truncated: true,
+                    }));
+                }
+                observation
+            })
+            .collect::<Vec<_>>();
+        let encoded = encode(&stored)?;
         if encoded.len() > 65536 {
             return Err(SafeError::new("payload_too_large"));
         }
         let tx = self.conn.transaction().map_err(internal)?;
-        for observation in observations {
+        for observation in &stored {
             if observation.validate().is_ok()
                 && children.iter().any(|c| {
                     c.request_id == observation.request_id

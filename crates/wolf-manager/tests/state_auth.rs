@@ -655,3 +655,49 @@ fn history_terminal_cap_preserves_recent_thousand_and_unknown() {
         OperationState::UnknownInterrupted
     );
 }
+#[test]
+fn unknown_error_envelope_is_not_terminal_journal_evidence() {
+    let t = tempdir().unwrap();
+    let mut s = Store::open(&t.path().join("data"), 0).unwrap();
+    s.add_pc(pc("pc"), 0).unwrap();
+    let pc = PcId::new("pc").unwrap();
+    let request = RpcRequest {
+        version: 1,
+        request_id: uuid::Uuid::new_v4(),
+        pc_id: pc.clone(),
+        operation: RpcOperation::Stop(EmptyPayload {}),
+    };
+    let id = s
+        .enqueue_operation(
+            &pc,
+            OperationKind::Stop,
+            None,
+            std::slice::from_ref(&request),
+            0,
+        )
+        .unwrap();
+    s.begin_dispatch(request.request_id, 1).unwrap();
+    let response = RpcResponse {
+        version: 1,
+        request_id: request.request_id,
+        pc_id: pc,
+        ok: false,
+        result: None,
+        error: Some(SafeError::new("unknown_interrupted")),
+    };
+    assert!(s.record_response(request.request_id, &response, 2).is_err());
+    assert_eq!(
+        s.finish_recorded_operation(id, 3).unwrap().state,
+        OperationState::UnknownInterrupted
+    );
+}
+#[test]
+fn oversized_bootstrap_secret_cannot_authenticate_a_truncated_prefix() {
+    let t = tempdir().unwrap();
+    let path = t.path().join("token");
+    let mut bytes = vec![b'x'; 1536];
+    bytes[1024] = b'\n';
+    fs::write(&path, bytes).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o400)).unwrap();
+    assert!(BootstrapSecret::read(&path).is_err());
+}

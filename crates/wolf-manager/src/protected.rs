@@ -173,6 +173,9 @@ impl DataRoot {
             }
         }
     }
+    pub fn sync(&self) -> Result<(), SafeError> {
+        self.directory.sync_all().map_err(internal)
+    }
     pub fn initialize_marker(&self) -> Result<(), SafeError> {
         if self.marker_present()? {
             return Ok(());

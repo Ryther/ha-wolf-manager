@@ -61,6 +61,7 @@ impl Purpose {
         }
     }
 }
+#[derive(Clone)]
 pub struct BootstrapSecret {
     digest: Vec<u8>,
 }
@@ -77,6 +78,7 @@ impl BootstrapSecret {
         let file = File::from(fd);
         let meta = file.metadata().map_err(internal)?;
         if !meta.is_file()
+            || meta.len() > 1024
             || meta.nlink() != 1
             || meta.mode() & 0o077 != 0
             || ![0, rustix::process::geteuid().as_raw()].contains(&meta.uid())
