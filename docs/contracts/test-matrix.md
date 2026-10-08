@@ -90,17 +90,46 @@ High line coverage does not replace real OS, protocol-ordering, crash-safety or
 streaming checks. A configured overall-coverage gate must be reported honestly
 when it fails.
 
-The frozen `66f0867` run passed 220 standard tests and 14 selected
-broker/root cases; workspace Clippy passed with warnings denied. Rust LCOV
-covered 9,970/12,897 lines (77.30%): core 94.22%, host 77.01%, manager 75.67%.
-Coordinator coverage was 94.6%, SSH 94.0%, authentication 93.9%, MQTT 82.3%
-and installer 71.1%. All 52 Rust source-file counts matched the imported
-Sonar measures for the same revision. Integration-test files are excluded
-from the Rust source report; inline test modules in source files remain included.
-
-Full-project Sonar coverage was 70.3% (9,970/14,176) and the explicit local
-overall 80% comparison failed. New-code coverage was 100%, a separate metric.
-The analysis reported 70 maintainability findings and zero reported bugs,
+The frozen `bcbb742` analysis imported all 52 Rust, two JavaScript and 11 Python
+files with exact executable/uncovered-line counts. Combined coverage was
+**80.9% (12,545/15,516 executable lines)** and the local overall 80% gate passed.
+The analysis had no unresolved maintainability findings, reported bugs,
 vulnerabilities or security hotspots; this does not establish absence of defects.
-Installer failure paths, browser/Python coverage, branch coverage and native
-ARM/GPU streaming remain verification gaps.
+
+| Component | Covered / executable lines | Line coverage |
+| --- | ---: | ---: |
+| Rust workspace | 11,142 / 13,904 | 80.13% |
+| Core contracts | 660 / 700 | 94.29% |
+| Host toolkit | 6,066 / 7,325 | 82.81% |
+| Manager | 4,416 / 5,879 | 75.11% |
+| Python release tooling | 1,039 / 1,237 | 84.00% |
+| Browser and Node coverage converter | 364 / 375 | 97.07% |
+
+Fresh Python execution passed 68 release tests; fresh Chromium execution passed
+34 browser journeys, including keyboard/mobile controls, stale revisions,
+authentication expiry, unknown observations and confirmed stopped hosts. V8
+execution includes the Node converter itself; imported coverage is not generated
+from an inventory of unexecuted code.
+
+Rust execution at `a09b30b` passed 220 standard tests and 22 explicitly selected
+broker/root cases; strict workspace Clippy passed. All 106 Rust/test, Cargo,
+toolchain and installer-template inputs were byte-identical at `bcbb742` before
+reusing those Rust reports. Integration-test files are excluded from the Rust
+source report; inline test modules remain included. The executable denominator
+therefore includes those inline tests and is not a production-only metric.
+Installer line coverage was 87.9%, coordinator 94.6%, SSH 94.0% and authentication
+93.9%. Manager CLI/bootstrap and failure branches still have uncovered lines;
+coverage is not a claim that every runtime path has been exercised.
+
+The isolated HA app retained byte-exact cold backups, ownership and modes during
+updates. Native toolkit upgrades retained guarded preview/apply/activate plans
+and verified preimages. Actual HA MQTT ON/OFF and native SSH refresh passed after
+the toolkit upgrade; Steam/Wolf files, pairing keys, policy and broker credentials
+remained unchanged. The updated catalog executable was verified active with zero
+failure restarts. These runtime checks complement the measured fixture execution;
+they are not instrumented GPU/Moonlight tests.
+
+The checked-in CI independently regenerates all three reports for trusted
+candidates, enforces at least 80% combined coverage and verifies exact report
+imports and analysis revision. A successful local Community analysis cannot
+substitute for the required live SonarCloud analysis of a release candidate.

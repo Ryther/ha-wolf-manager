@@ -59,6 +59,27 @@ Activation without flags does not request starting Wolf or the catalog. Once the
 
 The installed `wolf-manager` account has no Docker/admin/journal group membership. SSH disables passwords, PTY, forwarding and user rc files; a fixed dispatcher accepts only `wolf-manager-rpc-v1`. Sudo admits only the fixed no-argument privileged helper, with no environment injection. This is not an interactive SSH account. Restrict its network reachability to the manager where practical.
 
+## Verify a toolkit upgrade
+
+Upgrade through a new reviewed preview/apply/activate plan; never overwrite the
+managed executable directly because its retained receipt and preimages are
+recovery authority. Existing Steam libraries, pairing files and broker credentials
+must stay in their verified locations.
+
+`--start-catalog` starts an inactive catalog; it does not restart an already
+running process. After upgrading the toolkit, explicitly load the new catalog
+executable without restarting Wolf:
+
+```sh
+sudo systemctl restart wolf-manager-catalog.service
+sudo systemctl show wolf-manager-catalog.service --property=ActiveState,NRestarts
+```
+
+Expect `ActiveState=active`, no failure restarts, and a fresh complete catalog in
+the dashboard. Keep the previous installer receipt and backups until these
+checks succeed. Verify a normal explicit Wolf start/stop through the manager;
+never infer successful installation from a running old process alone.
+
 ## Configure the catalog publisher
 
 Before preview, create a broker configuration from [broker.example.json](https://github.com/Ryther/ha-wolf-manager/blob/main/examples/host/broker.example.json). Replace host, PC name and protected credential-file paths. Its `username_file` and `password_file` contain separate broker credentials; never copy the manager's broad broker identity. The catalog configuration and files must meet the host's protected-file checks. The config runs under the Steam UID; give that UID ownership, mode `0600`, and a private directory. Set the policy's `broker_secret_file` to `/etc/wolf-manager/catalog.json` (the installer requires a destination under `/etc/wolf-manager/`) and pass the prepared source file using `--broker-config /root/wolf-broker.json` during preview. The source preview input is root owned; the installed catalog file is owned by the Steam identity.

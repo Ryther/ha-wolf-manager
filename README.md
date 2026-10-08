@@ -5,8 +5,7 @@ Assistant or an authenticated standalone dashboard. The Rust manager connects
 through restricted, host-key-pinned SSH. A separate Rust toolkit runs on each PC;
 it does not require Ansible.
 
-This repository is preparing its first public release. Installation and runtime
-integration are experimental. Passing isolated tests does not certify your PC,
+Installation and runtime integration are experimental. Passing isolated tests does not certify your PC,
 GPU, Moonlight client or live Home Assistant installation.
 
 The project includes:
