@@ -1,0 +1,21 @@
+[Unit]
+Description=HA Wolf Manager read-only Steam catalog
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@STEAM_UID@
+Group=@STEAM_GID@
+ExecStart=/usr/local/bin/wolf-manager-host catalog-daemon
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=@CATALOG_STATE@
+PrivateTmp=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target

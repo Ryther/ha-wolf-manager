@@ -1,0 +1,2 @@
+# Managed by HA Wolf Manager. No command arguments, shell or environment grant.
+wolf-manager ALL=(root) NOPASSWD: NOSETENV: /usr/libexec/wolf-manager/wolf-host-root ""

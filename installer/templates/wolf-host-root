@@ -1,0 +1,4 @@
+#!/bin/sh
+# sudo permits this entrypoint only with an empty argument list.
+[ "$#" -eq 0 ] || exit 64
+exec /usr/local/bin/wolf-manager-host privileged-rpc

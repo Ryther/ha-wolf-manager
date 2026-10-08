@@ -1,0 +1,16 @@
+[Unit]
+Description=Wolf streaming managed by HA Wolf Manager
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/wolf-manager-host lifecycle-start
+ExecStop=/usr/local/bin/wolf-manager-host lifecycle-stop
+TimeoutStartSec=370
+TimeoutStopSec=190
+
+[Install]
+WantedBy=multi-user.target

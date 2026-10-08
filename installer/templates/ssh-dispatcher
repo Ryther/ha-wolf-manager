@@ -1,0 +1,3 @@
+#!/bin/sh
+# Fixed entrypoint; the Rust dispatcher validates the exact original command.
+exec /usr/local/bin/wolf-manager-host dispatch-rpc
