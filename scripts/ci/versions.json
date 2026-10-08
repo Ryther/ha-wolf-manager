@@ -1,0 +1,99 @@
+{
+  "verified_at": "2026-10-08",
+  "actions": {
+    "actions/checkout": {
+      "version": "7.0.1",
+      "commit": "3d3c42e5aac5ba805825da76410c181273ba90b1",
+      "source": "https://github.com/actions/checkout/blob/main/CHANGELOG.md"
+    },
+    "actions/upload-artifact": {
+      "version": "7.0.2",
+      "commit": "cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+      "source": "https://github.com/actions/upload-artifact/releases"
+    },
+    "docker/setup-buildx-action": {
+      "version": "4.3.0",
+      "commit": "37fe631027851001ddb9b187196cc803df7f5f0e",
+      "source": "https://github.com/docker/setup-buildx-action/releases"
+    },
+    "github/codeql-action": {
+      "version": "4.38.2",
+      "commit": "2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2",
+      "source": "https://github.com/github/codeql-action/releases"
+    },
+    "googleapis/release-please-action": {
+      "version": "5.0.0",
+      "commit": "45996ed1f6d02564a971a2fa1b5860e934307cf7",
+      "source": "https://github.com/googleapis/release-please-action/releases"
+    },
+    "SonarSource/sonarqube-scan-action": {
+      "version": "8.3.0",
+      "commit": "d209202bc7d53ff1cc128f7f907dac145c9d6ae9",
+      "source": "https://github.com/SonarSource/sonarqube-scan-action/releases"
+    }
+  },
+  "images": {
+    "rust": {
+      "reference": "rust:1.99.0-alpine@sha256:0cce0a5e0e8ba67b455257a3a02a1d99005f382748789d6464460028810f1627",
+      "source": "https://blog.rust-lang.org/releases/"
+    },
+    "buildkit": {
+      "reference": "moby/buildkit:v0.34.0@sha256:b059f8d7226d0b326bc871af489a5dddf65e36af4d20d14251b072974d9ee87c",
+      "source": "https://github.com/moby/buildkit/releases"
+    },
+    "trivy": {
+      "reference": "ghcr.io/aquasecurity/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa",
+      "source": "https://github.com/aquasecurity/trivy/pkgs/container/trivy"
+    },
+    "mosquitto": {
+      "reference": "eclipse-mosquitto:2.1.2-alpine@sha256:38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408",
+      "source": "https://mosquitto.org/download/"
+    }
+  },
+  "tools": {
+    "buildx": {
+      "version": "0.38.0",
+      "source": "https://github.com/docker/buildx/releases"
+    },
+    "cargo-audit": {
+      "version": "0.22.2",
+      "source": "https://crates.io/crates/cargo-audit"
+    },
+    "cargo-llvm-cov": {
+      "version": "0.9.1",
+      "source": "https://github.com/taiki-e/cargo-llvm-cov/blob/main/CHANGELOG.md"
+    },
+    "gitleaks": {
+      "version": "8.30.1",
+      "source": "https://github.com/gitleaks/gitleaks/releases"
+    },
+    "actionlint": {
+      "version": "1.7.12",
+      "source": "https://github.com/rhysd/actionlint/releases"
+    },
+    "sonar-scanner": {
+      "version": "8.1.0.6389",
+      "source": "https://docs.sonarsource.com/sonarqube-cloud/analyzing-source-code/scanners/sonarscanner-cli"
+    },
+    "jsonschema": {
+      "version": "4.26.0",
+      "source": "https://pypi.org/project/jsonschema/"
+    },
+    "PyYAML": {
+      "version": "6.0.3",
+      "source": "https://pypi.org/project/PyYAML/"
+    },
+    "release-please": {
+      "version": "17.6.0",
+      "latest_standalone": "17.11.2",
+      "source": "https://github.com/googleapis/release-please/releases",
+      "constraint": "The latest stable action v5.0.0 bundles core 17.6.0 in its committed package-lock. The actual fixture matches that bundle; it does not claim standalone 17.6.0 is latest."
+    }
+  },
+  "constraints": [
+    "Ubuntu 24.04 native public amd64/arm64 runners are deliberately selected for the established Docker/browser test environment; this is not a claim that Ubuntu 24.04 is the newest LTS.",
+    "Runner-provided Python/Node/rustup/Docker are infrastructure prerequisites, not independently downloaded tool releases; selected Rust toolchain and build/scanner dependencies are explicit.",
+    "The add-on community schema is vendored from frenck/action-app-linter v2.21.1 commit b9cfd1bc62ba60d2c4fc96317b5f7ada5923f4a7, retaining its MIT license. It does not prove actual Supervisor execution.",
+    "OCI publication uses Python standard library and the Distribution API; no Skopeo image is selected. The current official Skopeo image reported 1.22.3 while latest source was 1.24.1."
+  ]
+}

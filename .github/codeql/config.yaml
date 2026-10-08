@@ -1,0 +1,7 @@
+name: Product and automation security
+queries:
+  - uses: security-extended
+paths-ignore:
+  - _tmp
+  - target
+  - node_modules

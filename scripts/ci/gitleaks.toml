@@ -1,0 +1,6 @@
+title = "HA Wolf Manager full-history secret scanning"
+[extend]
+useDefault = true
+[[allowlists]]
+description = "Disposable checked-in TLS fixture; never used by runtime deployments"
+paths = ['''^crates/wolf-manager/tests/fixtures/tls-key\.pem$''']
