@@ -340,9 +340,8 @@ pub fn prepare(
     };
     let container = container_root(&compose, &policy.wolf_config.root, &policy.container_name)?;
     if online {
-        let _ = rustls::crypto::ring::default_provider().install_default();
         let client = reqwest::blocking::Client::builder()
-            .tls_backend_rustls()
+            .tls_backend_preconfigured(public_tls_config()?)
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(5))
@@ -365,5 +364,38 @@ pub fn prepare(
             apps,
             &mut Offline,
         )
+    }
+}
+
+fn public_tls_config() -> io::Result<rustls::ClientConfig> {
+    let roots = rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let config = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .map_err(|_| invalid())?
+    .with_root_certificates(roots)
+    .with_no_client_auth();
+    Ok(config)
+}
+
+#[cfg(test)]
+mod tls_tests {
+    use super::*;
+    #[test]
+    fn embedded_public_roots_construct_provider_explicit_https_client() {
+        assert!(!webpki_roots::TLS_SERVER_ROOTS.is_empty());
+        let tls = public_tls_config().unwrap();
+        assert_eq!(
+            tls.crypto_provider().cipher_suites.len(),
+            rustls::crypto::ring::default_provider().cipher_suites.len()
+        );
+        reqwest::blocking::Client::builder()
+            .tls_backend_preconfigured(tls)
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
     }
 }
