@@ -20,7 +20,7 @@ Temporary Steam overlays remain active until verified restoration. Wolf managed 
 ## OpenSSH environment boundary
 
 `PermitUserEnvironment` is a global OpenSSH directive and must not appear in a Match block. The managed account has a locked password, a root-controlled unavailable home and no user environment file. Generated authorized keys never accept environment options. Validate the effective per-user `AcceptEnv` restriction with `sshd -T` and refuse activation if unsafe inherited environment rules remain. Preserve global policy for unrelated users.
-# Transform preimages
+## Transform preimages
 
 Steam and Wolf transformations must pass the exact bytes they read to the
 guarded write. `TransactionStore::apply_expected` compares those bytes with its

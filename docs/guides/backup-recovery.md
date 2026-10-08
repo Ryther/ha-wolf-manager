@@ -10,7 +10,7 @@ Keep host journals and pending transaction backups together. An uncertain operat
 
 ## Create and verify a standalone bundle
 
-Stop the manager first. Use the same verified image and UID as the deployment. The destination is a **new directory**, outside the source data, and must not already exist. In the [Compose example](../../examples/standalone/compose.yaml):
+Stop the manager first. Use the same verified image and UID as the deployment. The destination is a **new directory**, outside the source data, and must not already exist. In the [Compose example](https://github.com/Ryther/ha-wolf-manager/blob/main/examples/standalone/compose.yaml):
 
 ```sh
 docker compose stop wolf-manager

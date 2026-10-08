@@ -19,3 +19,12 @@ Native HTTPS verification (2026-10-08): `tokio-rustls` 0.26.6 ([canonical packag
 Reqwest 0.13.5 uses `rustls-no-provider` rather than `rustls`: verified canonical registry package `Cargo.toml` shows `rustls` enables AWS-LC; the provider-free feature allows the explicit ring provider shared by native HTTPS/SSH/MQTT. The feature still includes the platform verifier dependency; scratch HTTPS clients must use an explicit preconfigured Rustls client with embedded/private roots instead of invoking the default platform verifier.
 
 PNG icon conversion: image 0.25.10 was freshly verified with canonical `cargo info image` on 2026-10-08 ([package metadata](https://crates.io/crates/image/0.25.10)); only JPEG and PNG features are enabled. The host uses the already verified reqwest 0.13.5 blocking feature with explicit embedded WebPKI roots and ring; redirects and environment proxies are disabled. Image decoding and aggregate request budgets are bounded; unavailable covers produce an actual neutral PNG, not JPEG bytes labeled PNG.
+## Documentation builder
+
+Verified on 2026-10-08 against the canonical PyPI releases:
+[MkDocs 1.6.1](https://pypi.org/project/mkdocs/) and
+[Material for MkDocs 9.7.7](https://pypi.org/project/mkdocs-material/).
+MkDocs 2.0 development releases are prereleases; the site uses the latest stable
+1.6.1 with the stable Material theme. Reassess compatibility and maintenance
+before upgrading either package. Public docs build strictly with
+`python -m mkdocs build --strict`; local planning and evidence are excluded.

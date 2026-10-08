@@ -6,7 +6,7 @@
 
 You need Docker with Compose, a verified manager image, a DNS name whose certificate your browser trusts, and connectivity from the manager to each PC's SSH port. The manager does not need a Docker socket or host privileges. The runtime image is built from scratch and has no shell or package manager.
 
-Copy [compose.yaml](../../examples/standalone/compose.yaml), [.env.example](../../examples/standalone/.env.example) and [.gitignore](../../examples/standalone/.gitignore) to a new deployment directory. Copy `.env.example` to `.env`. Set `WOLF_MANAGER_IMAGE` to the verified release digest and `WOLF_PUBLIC_ORIGIN` to the exact HTTPS browser origin, including a non-default port. Replace the example hostname. Set a specific LAN bind address if other machines must connect; the default is loopback.
+Copy [compose.yaml](https://github.com/Ryther/ha-wolf-manager/blob/main/examples/standalone/compose.yaml), [.env.example](https://github.com/Ryther/ha-wolf-manager/blob/main/examples/standalone/.env.example) and [.gitignore](https://github.com/Ryther/ha-wolf-manager/blob/main/examples/standalone/.gitignore) to a new deployment directory. Copy `.env.example` to `.env`. Set `WOLF_MANAGER_IMAGE` to the verified release digest and `WOLF_PUBLIC_ORIGIN` to the exact HTTPS browser origin, including a non-default port. Replace the example hostname. Set a specific LAN bind address if other machines must connect; the default is loopback.
 
 For a **new, empty** deployment directory:
 

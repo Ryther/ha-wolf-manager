@@ -1,0 +1,54 @@
+site_name: HA Wolf Manager
+site_url: https://ryther.github.io/ha-wolf-manager/
+site_description: Installation, operations and development of HA Wolf Manager.
+repo_url: https://github.com/Ryther/ha-wolf-manager
+repo_name: Ryther/ha-wolf-manager
+docs_dir: docs
+site_dir: site
+exclude_docs: |
+  waves/
+  checklists/
+  adr/
+  progress.md
+  checklist.md
+  development/reference-inventory.md
+theme:
+  name: material
+  language: en
+  features:
+    - navigation.sections
+    - navigation.top
+    - search.highlight
+plugins:
+  - search
+validation:
+  nav:
+    omitted_files: ignore
+  links:
+    not_found: warn
+    unrecognized_links: warn
+nav:
+  - Home: index.md
+  - Get started:
+      - Choose a deployment: guides/index.md
+      - Home Assistant: guides/home-assistant.md
+      - Standalone Docker: guides/standalone.md
+      - Install or adopt a PC: guides/host-installation.md
+  - Operate:
+      - Controls and games: guides/operations.md
+      - Backup and recovery: guides/backup-recovery.md
+      - Troubleshoot: guides/troubleshooting.md
+  - Develop:
+      - Environment: development/environment.md
+      - Crate interfaces: development/crate-contract.md
+      - Host authority: development/host-adapter-contract.md
+      - Dependencies: development/dependencies.md
+  - Contracts:
+      - Configuration: contracts/schema.md
+      - API: contracts/api-contract.md
+      - SSH and MQTT: contracts/integration-contract.md
+      - Runtime: contracts/runtime-contract.md
+      - Recovery: contracts/recovery-contract.md
+      - Test matrix: contracts/test-matrix.md
+      - Install and release: contracts/rollout-contract.md
+  - Release: guides/releases.md
