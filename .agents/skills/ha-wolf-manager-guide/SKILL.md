@@ -41,6 +41,10 @@ it does not change a running game session. Start or dashboard Restart applies th
 requested staged revision through the fixed service. MQTT exposes exact ON/OFF
 controls for Home Assistant and voice automations; it does not expose Restart.
 
+Expand **Configuration revisions** to compare saved, staged and running values.
+Expand **Game settings** to edit a game; **Operation history** and **Diagnostics**
+are separate disclosures.
+
 Game settings include ordered launch parameters, optional configured
 Proton-CachyOS, FSR4 options and the diagnostic test ball. Read host capability and
 catalog freshness before choosing games or assuming a setting is effective.

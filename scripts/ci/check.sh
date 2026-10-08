@@ -50,7 +50,7 @@ PYREADY
     cargo llvm-cov report --locked --workspace --ignore-filename-regex '/tests/' --lcov --output-path _tmp/evidence/rust.lcov
     cargo clippy --locked --workspace --all-targets --message-format=json > _tmp/evidence/clippy.json
     python -m venv _tmp/coverage-venv
-    _tmp/coverage-venv/bin/python -m pip install --only-binary=:all: coverage==7.16.2 jsonschema==4.26.0 PyYAML==6.0.3
+    _tmp/coverage-venv/bin/python -m pip install --only-binary=:all: -r scripts/ci/requirements.txt
     _tmp/coverage-venv/bin/python -m coverage run --rcfile=scripts/ci/python_coverage.ini -m unittest discover -s tests/release -v
     _tmp/coverage-venv/bin/python -m coverage xml --rcfile=scripts/ci/python_coverage.ini -o _tmp/evidence/python.xml
     ;;

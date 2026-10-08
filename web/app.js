@@ -180,12 +180,18 @@
       button('Restart',()=>queue(root+'service/restart',{expected_desired_revision:desired}),{disabled:unavailable})));
     return service;
   }
+  function serviceLabel(observed){
+    // Match the confirmed MQTT OFF observation; a missing container alone is ambiguous.
+    const container=observed?.container_state||'unknown';
+    if(observed?.systemd_state==='inactive'&&['stopped','exited','absent','not_found','missing'].includes(container))return 'stopped';
+    return container;
+  }
   function appendServiceObservation(service,observed,availability,lastKnown){
     const observation=node('div',null,{class:'service-observation'});
     let stateClass='';
     if(lastKnown)stateClass='is-stale';
     else if(observed?.container_state==='running')stateClass='is-running';
-    append(observation,node('p',(lastKnown?'Last known service: ':'Service: ')+(observed?.container_state||'unknown'),{class:'service-state '+stateClass}),node('p','Host availability: '+availability,{class:'availability'}));
+    append(observation,node('p',(lastKnown?'Last known service: ':'Service: ')+serviceLabel(observed),{class:'service-state '+stateClass}),node('p','Host availability: '+availability,{class:'availability'}));
     service.append(observation);
     const observedTime=status?.observed_at;
     const date=Number.isFinite(observedTime)?new Date(observedTime):null;

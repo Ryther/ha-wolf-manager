@@ -193,3 +193,17 @@ test('expired standalone session returns to authentication without resubmitting 
 test('history failure remains visible within its disclosure and empty catalog is explicit',async({page})=>{
  await fixture(page);await page.route('**/api/v1/pcs/desk/operations?limit=20',route=>route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:{code:'storage_unavailable',message:'History unavailable'}})}));await page.route('**/api/v1/pcs/desk/games',route=>route.fulfill({contentType:'application/json',body:JSON.stringify({games:[],availability:'online',catalog_generation:3})}));await page.getByRole('button',{name:'Refresh',exact:true}).click();await expect(page.getByText('No games in the last complete catalog.')).toBeVisible();await page.getByText('Operation history',{exact:true}).click();await expect(page.getByText('Operation history unavailable.')).toBeVisible();
 });
+test('confirmed inactive service labels known stopped container states without assuming missing means stopped',async({page})=>{
+ await fixture(page);
+ for(const container of ['stopped','exited','absent','not_found','missing']){
+  await page.route('**/api/v1/pcs/desk/status',route=>route.fulfill({contentType:'application/json',body:JSON.stringify({status:{systemd_state:'inactive',container_state:container,recovery_pending:false},capabilities:{ready:true},availability:'online',observed_at:1})}));
+  await page.getByRole('button',{name:'Refresh',exact:true}).click();await expect(page.getByText('Service: stopped',{exact:true})).toBeVisible();
+ }
+ for(const [service,container]of [['active','missing'],['failed','missing'],['unknown','missing'],['inactive','unknown'],['inactive','dead']]){
+  await page.route('**/api/v1/pcs/desk/status',route=>route.fulfill({contentType:'application/json',body:JSON.stringify({status:{systemd_state:service,container_state:container,recovery_pending:false},capabilities:{ready:true},availability:'online',observed_at:1})}));
+  await page.getByRole('button',{name:'Refresh',exact:true}).click();await expect(page.getByText('Service: '+container,{exact:true})).toBeVisible();await expect(page.getByText('Service: stopped',{exact:true})).toHaveCount(0);
+ }
+});
+test('offline stopped observation keeps last-known prefix without suggesting a live confirmation',async({page})=>{
+ await fixture(page);await page.route('**/api/v1/pcs/desk/status',route=>route.fulfill({contentType:'application/json',body:JSON.stringify({status:{systemd_state:'inactive',container_state:'missing',recovery_pending:false},capabilities:{ready:true},availability:'offline',observed_at:1})}));await page.getByRole('button',{name:'Refresh',exact:true}).click();await expect(page.getByText('Last known service: stopped',{exact:true})).toBeVisible();await expect(page.getByText('Service: stopped',{exact:true})).toHaveCount(0);await expect(page.getByText('Service state and observed revisions are last known;', {exact:false})).toBeVisible();
+});

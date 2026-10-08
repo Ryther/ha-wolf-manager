@@ -7,6 +7,9 @@ a release, uploads images or reads household state.
 Run local adversarial tests:
 
 ```sh
+python3 -m venv _tmp/python-venv
+. _tmp/python-venv/bin/activate
+python -m pip install --only-binary ':all:' -r scripts/ci/requirements.txt
 python -m unittest discover -s tests/release -v
 ```
 

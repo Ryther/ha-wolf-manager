@@ -15,6 +15,9 @@ Read [AGENTS.md](AGENTS.md), the relevant [contracts](docs/contracts/integration
 From the repository root:
 
 ```sh
+python3 -m venv _tmp/python-venv
+. _tmp/python-venv/bin/activate
+python -m pip install --only-binary ':all:' -r scripts/ci/requirements.txt
 cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked --workspace

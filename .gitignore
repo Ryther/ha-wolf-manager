@@ -270,3 +270,4 @@
 !scripts/ci/browser_coverage.cjs
 !scripts/ci/python_coverage.ini
 !tests/release/test_network_contracts.py
+!scripts/ci/requirements.txt

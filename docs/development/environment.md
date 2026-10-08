@@ -48,7 +48,10 @@ cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked --workspace
 npm run test:ui
-python3 -m unittest discover -s tests/release -v
+python3 -m venv _tmp/python-venv
+. _tmp/python-venv/bin/activate
+python -m pip install --only-binary ':all:' -r scripts/ci/requirements.txt
+python -m unittest discover -s tests/release -v
 cargo test --locked -p ha-wolf-manager --test ssh --test coordinator
 cargo test --locked -p ha-wolf-manager --test mqtt -- --ignored
 ```

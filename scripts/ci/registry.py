@@ -16,6 +16,7 @@ PREFIX = '/v2/ryther/ha-wolf-manager/'
 
 
 MANIFEST_PATH = 'manifests/'
+BLOB_PATH = 'blobs/'
 
 OCI_BLOB_PREFIX = 'oci/blobs/sha256/'
 
@@ -92,7 +93,7 @@ def transfer_blob(files, descriptor, request, done):
     digest = descriptor['digest']
     if digest in done: return
     data = files[OCI_BLOB_PREFIX + v.parse_digest(digest)]
-    status, headers, _ = request('HEAD', PREFIX + 'blobs/' + digest)
+    status, headers, _ = request('HEAD', PREFIX + BLOB_PATH + digest)
     if status == 404:
         status, headers, _ = request('POST', PREFIX + 'blobs/uploads/', b'', 'application/octet-stream')
         v.require(status == 202, 'registry_start_upload')
@@ -100,7 +101,7 @@ def transfer_blob(files, descriptor, request, done):
         location += ('&' if '?' in location else '?') + 'digest=' + urllib.parse.quote(digest, safe='')
         status, headers, _ = request('PUT', location, data, 'application/octet-stream')
         v.require(status == 201 and header(headers, 'Docker-Content-Digest') == digest, 'registry_blob_upload')
-        status, headers, _ = request('HEAD', PREFIX + 'blobs/' + digest)
+        status, headers, _ = request('HEAD', PREFIX + BLOB_PATH + digest)
     v.require(status == 200 and header(headers, 'Docker-Content-Digest') == digest
               and header(headers, 'Content-Length') == str(len(data)), 'registry_blob_identity')
     done.add(digest)
@@ -166,7 +167,7 @@ def verify_public(files, image, request):
         for blob in [manifest['config'], *manifest['layers']]:
             blobs[blob['digest']] = blob
     for digest, descriptor in blobs.items():
-        status, headers, _ = request('HEAD', PREFIX + 'blobs/' + digest)
+        status, headers, _ = request('HEAD', PREFIX + BLOB_PATH + digest)
         v.require(status == 200 and header(headers, 'Docker-Content-Digest') == digest
                   and header(headers, 'Content-Length') == str(descriptor['size']), 'registry_public_blob_identity')
     return root['digest']
