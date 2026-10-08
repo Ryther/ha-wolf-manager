@@ -85,19 +85,23 @@ pub fn healthcheck(data: &Path) -> Result<(), SafeError> {
     }
     Ok(())
 }
+pub(crate) fn parse_instance_id(bytes: &[u8]) -> Result<uuid::Uuid, SafeError> {
+    let text = std::str::from_utf8(bytes).map_err(internal)?;
+    let id = uuid::Uuid::parse_str(text).map_err(internal)?;
+    if id.is_nil() || id.to_string() != text {
+        return Err(SafeError::validation());
+    }
+    Ok(id)
+}
 impl Store {
     pub fn instance_id(&self) -> Result<uuid::Uuid, SafeError> {
         self.root.verify()?;
         let name = "instance-id";
         let id = match self.root.file(name, false) {
             Ok(file) => {
-                let mut bytes = String::new();
-                file.take(37).read_to_string(&mut bytes).map_err(internal)?;
-                let id = uuid::Uuid::parse_str(&bytes).map_err(internal)?;
-                if id.is_nil() || id.to_string() != bytes {
-                    return Err(SafeError::validation());
-                }
-                id
+                let mut bytes = Vec::new();
+                file.take(37).read_to_end(&mut bytes).map_err(internal)?;
+                parse_instance_id(&bytes)?
             }
             Err(_) => {
                 if std::fs::symlink_metadata(self.root.path(name)).is_ok() {

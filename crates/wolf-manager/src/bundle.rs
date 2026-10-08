@@ -176,7 +176,10 @@ fn inventory(root: &DataRoot) -> Result<Vec<String>, SafeError> {
     let mut files = vec!["manager.sqlite3".into()];
     for name in ["initialized", "instance-id"] {
         if std::fs::symlink_metadata(root.path(name)).is_ok() {
-            root.file(name, false)?;
+            let file = root.file(name, false)?;
+            if name == "instance-id" {
+                crate::health::parse_instance_id(&read_limited(file, 37)?)?;
+            }
             files.push(name.into());
         }
     }

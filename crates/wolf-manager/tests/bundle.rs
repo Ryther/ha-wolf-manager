@@ -30,6 +30,71 @@ fn populate(root: &std::path::Path) -> Vec<u8> {
     fs::read(root.join("keys/fixture/id_ed25519")).unwrap()
 }
 #[test]
+fn backup_refuses_an_invalid_mqtt_identity_without_changing_source() {
+    let temp = tempdir().unwrap();
+    let data = temp.path().join("data");
+    populate(&data);
+    fs::write(data.join("instance-id"), b"not-a-uuid").unwrap();
+    fs::set_permissions(data.join("instance-id"), fs::Permissions::from_mode(0o600)).unwrap();
+    let database = fs::read(data.join("manager.sqlite3")).unwrap();
+    assert!(bundle::backup(&data, &temp.path().join("bundle")).is_err());
+    assert!(!temp.path().join("bundle").exists());
+    assert_eq!(fs::read(data.join("instance-id")).unwrap(), b"not-a-uuid");
+    assert_eq!(fs::read(data.join("manager.sqlite3")).unwrap(), database);
+    let id = uuid::Uuid::new_v4().to_string();
+    fs::write(data.join("instance-id"), id.as_bytes()).unwrap();
+    let backup = temp.path().join("valid-bundle");
+    bundle::backup(&data, &backup).unwrap();
+    bundle::preview(&backup).unwrap();
+    let target = temp.path().join("restored");
+    bundle::restore(&backup, &target).unwrap();
+    assert_eq!(fs::read(target.join("instance-id")).unwrap(), id.as_bytes());
+    assert_eq!(
+        Store::open(&target, 5)
+            .unwrap()
+            .instance_id()
+            .unwrap()
+            .to_string(),
+        id
+    );
+}
+#[test]
+fn matching_checksum_does_not_authorize_an_invalid_mqtt_identity() {
+    use sha2::{Digest, Sha256};
+    let temp = tempdir().unwrap();
+    let data = temp.path().join("data");
+    populate(&data);
+    let id = uuid::Uuid::new_v4().to_string();
+    fs::write(data.join("instance-id"), id.as_bytes()).unwrap();
+    fs::set_permissions(data.join("instance-id"), fs::Permissions::from_mode(0o600)).unwrap();
+    let backup = temp.path().join("bundle");
+    bundle::backup(&data, &backup).unwrap();
+    let manifest_path = backup.join("bundle.json");
+    let original = fs::read(&manifest_path).unwrap();
+    for invalid in [
+        "not-a-uuid".to_string(),
+        uuid::Uuid::nil().to_string(),
+        "A1234567-1234-4321-8123-123456789ABC".to_string(),
+    ] {
+        fs::write(backup.join("instance-id"), invalid.as_bytes()).unwrap();
+        let mut manifest: serde_json::Value = serde_json::from_slice(&original).unwrap();
+        let digest: String = Sha256::digest(invalid.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        manifest["files"]["instance-id"] = digest.into();
+        fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        assert!(bundle::preview(&backup).is_err());
+        let target = temp.path().join("target");
+        assert!(bundle::restore(&backup, &target).is_err());
+        assert!(!target.exists());
+        assert_eq!(
+            fs::read(backup.join("instance-id")).unwrap(),
+            invalid.as_bytes()
+        );
+    }
+}
+#[test]
 fn matched_bundle_restores_account_state_and_exact_key_without_touching_source() {
     let temp = tempdir().unwrap();
     let data = temp.path().join("data");
