@@ -45,7 +45,7 @@ No payload paths/units/shell/Docker/SQL/arbitrary environment. Root helper host 
 
 ## Wolf/Steam lifecycle
 
-Root-owned unit retains ordering: bounded optional dockercomposepull, cached-imageinspect BEFORE cleanup, temporary Steamapply, compose up with pull_policy: never, composestop and post-stoprestore. Defaultpull60seconds+5killgrace; registry failure uses cache, absentcache refuses before cleanup. InternalDockerrestartdoesnotpull. Cleanup stops only containers whose exact inspected identity and both ownership labels match this PC; it never removes containers or volumes. Preserve bindmounts/profileuserdata/pairingUUID/customapps and generated-marker appblocks. Repeated unchanged reconcile is byte-stable and does not restart. Core Steam/VDF parsing, TOML appgeneration, icon/covers and optional Proton/parameter behavior are ported into separate modules with source-backed golden fixtures. Never auto-delete stale app-profile/libraries as catalog cleanup.
+Root-owned unit retains ordering: bounded optional dockercomposepull, cached-imageinspect BEFORE cleanup, temporary Steamapply, compose up with pull_policy: never, composestop and post-stoprestore. Defaultpull60seconds+5killgrace; registry failure uses cache, absentcache refuses before cleanup. InternalDockerrestartdoesnotpull. Game cleanup stops only containers whose exact inspected identity and both ownership labels match this PC; it never removes those game containers or volumes. Compose down recreates the managed Wolf service container while retaining its bind-mounted data and volumes. Preserve bindmounts/profileuserdata/pairingUUID/customapps and generated-marker appblocks. Repeated unchanged reconcile is byte-stable and does not restart. Core Steam/VDF parsing, TOML appgeneration, icon/covers and optional Proton/parameter behavior are ported into separate modules with source-backed golden fixtures. Never auto-delete stale app-profile/libraries as catalog cleanup.
 
 PC CLI responsibilities: catalogdaemon(read-onlySteam+MQTT), dispatch-rpc(unprivileged validation/sudo), privileged-rpc(rootvalidation/operations), apply-steam/restore-steam(rootlifecyclehooks), installer-preflight/dryrun. Exact subcommand spelling is shared installed templates and tests, not a source of arbitrary RPCrouting. Catalogdaemon runs selected nonrootSteamidentity with configured readable brokersecret; no broadrootdaemon.
 
@@ -70,3 +70,11 @@ Reconcile every child that is sending/sent through request_status, compare exact
 ## Verified stage-only completion
 
 If staging is independently verified succeeded and the planned primary child remains durably not_dispatched, reconciliation terminates the parent as failed with code primary_not_dispatched and explicit stage_succeeded evidence. Desired/staged revision is visible, running revision remains the observed prior value. This is verified partial execution, never parent success or non-execution. No replay occurs; a subsequent explicit user action is a new operation after reconciliation. Any other possibly dispatched child must be terminally evidenced first; otherwise the parent remains unknown_interrupted. Test the crash after stage acknowledgment but before primary sending is committed.
+
+## Lifecycle completion evidence
+
+After a service command is submitted, a nonzero exit, broken output pipe or
+failed post-action observation cannot prove that no effect occurred. Such errors
+leave the original request Running with an uncertain outcome; no terminal RPC
+reply is issued and the original request cannot be replayed. Pre-submission
+revision, capability and recovery refusals may return a confirmed failure.

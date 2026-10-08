@@ -23,6 +23,11 @@ fn started(status: HostStatus) -> Result<HostStatus, SafeError> {
         Ok(status)
     }
 }
+fn uncertain(_: SafeError) -> SafeError {
+    // Submission may already have changed the service; only exact completion
+    // evidence can authorize a terminal journal record or another mutation.
+    SafeError::new("unknown_interrupted")
+}
 pub fn start(backend: &mut impl Backend, expected: &Revision) -> Result<HostStatus, SafeError> {
     let status = backend.status()?;
     revision(&status, expected)?;
@@ -32,8 +37,8 @@ pub fn start(backend: &mut impl Backend, expected: &Revision) -> Result<HostStat
     if status.systemd_state == "active" {
         return started(status);
     }
-    backend.start()?;
-    started_revision(backend.status()?, expected)
+    backend.start().map_err(uncertain)?;
+    started_revision(backend.status().map_err(uncertain)?, expected).map_err(uncertain)
 }
 fn started_revision(status: HostStatus, expected: &Revision) -> Result<HostStatus, SafeError> {
     revision(&status, expected)?;
@@ -45,25 +50,28 @@ fn started_revision(status: HostStatus, expected: &Revision) -> Result<HostStatu
 pub fn restart(backend: &mut impl Backend, expected: &Revision) -> Result<HostStatus, SafeError> {
     let status = backend.status()?;
     revision(&status, expected)?;
-    stop(backend)?;
-    let status = backend.status()?;
-    revision(&status, expected)?;
     if status.recovery_pending {
         return Err(SafeError::new("recovery_pending"));
     }
-    backend.start()?;
-    started_revision(backend.status()?, expected)
+    stop(backend)?;
+    let status = backend.status().map_err(uncertain)?;
+    revision(&status, expected).map_err(uncertain)?;
+    if status.recovery_pending {
+        return Err(SafeError::new("unknown_interrupted"));
+    }
+    backend.start().map_err(uncertain)?;
+    started_revision(backend.status().map_err(uncertain)?, expected).map_err(uncertain)
 }
 pub fn stop(backend: &mut impl Backend) -> Result<HostStatus, SafeError> {
-    backend.stop()?;
-    let status = backend.status()?;
+    backend.stop().map_err(uncertain)?;
+    let status = backend.status().map_err(uncertain)?;
     if status.recovery_pending {
-        return Err(SafeError::new("recovery_pending"));
+        return Err(SafeError::new("unknown_interrupted"));
     }
     if status.systemd_state != "inactive" && status.systemd_state != "failed"
         || status.container_state == "running"
     {
-        return Err(SafeError::new("host_unavailable"));
+        return Err(SafeError::new("unknown_interrupted"));
     }
     Ok(status)
 }

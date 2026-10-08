@@ -76,6 +76,85 @@ fn fake() -> Fake {
         fail_up: false,
     }
 }
+struct UncertainBackend {
+    inner: Fake,
+    post_observation: bool,
+    effects: bool,
+}
+impl Backend for UncertainBackend {
+    fn status(&mut self) -> Result<HostStatus, SafeError> {
+        if self.effects && self.post_observation {
+            Err(SafeError::new("host_unavailable"))
+        } else {
+            self.inner.status()
+        }
+    }
+    fn start(&mut self) -> Result<(), SafeError> {
+        self.effects = true;
+        self.inner.start()?;
+        if self.post_observation {
+            Ok(())
+        } else {
+            Err(SafeError::new("recovery_pending"))
+        }
+    }
+    fn stop(&mut self) -> Result<(), SafeError> {
+        self.effects = true;
+        self.inner.stop()?;
+        if self.post_observation {
+            Ok(())
+        } else {
+            Err(SafeError::new("recovery_pending"))
+        }
+    }
+}
+#[test]
+fn errors_after_lifecycle_submission_never_become_terminal_journal_proof() {
+    use std::{fs, os::unix::fs::PermissionsExt};
+    use wolf_manager_host::{journal::Journal, rpc};
+    for post_observation in [false, true] {
+        for kind in ["start", "stop", "restart"] {
+            let temporary = tempfile::tempdir().unwrap();
+            fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
+            let journal = Journal::open(temporary.path()).unwrap();
+            let mut backend = UncertainBackend {
+                inner: fake(),
+                post_observation,
+                effects: false,
+            };
+            let revision = backend.inner.status.staged_revision.clone().unwrap();
+            let payload = StartPayload {
+                expected_staged_revision: revision.clone(),
+            };
+            let request = RpcRequest {
+                version: 1,
+                request_id: uuid::Uuid::new_v4(),
+                pc_id: PcId::new("fixture").unwrap(),
+                operation: match kind {
+                    "start" => RpcOperation::Start(payload),
+                    "stop" => RpcOperation::Stop(EmptyPayload {}),
+                    _ => RpcOperation::Restart(payload),
+                },
+            };
+            let outcome = rpc::serve(&journal, &request.pc_id, &request, |_| {
+                match kind {
+                    "start" => lifecycle::start(&mut backend, &revision),
+                    "stop" => lifecycle::stop(&mut backend),
+                    _ => lifecycle::restart(&mut backend, &revision),
+                }
+                .map(RpcResult::Lifecycle)
+            });
+            assert!(backend.effects);
+            assert!(outcome.is_err(), "{kind} incorrectly issued terminal proof");
+            let evidence = journal.lookup(request.request_id, &request.pc_id).unwrap();
+            assert_eq!(evidence.phase, Some(JournalPhase::Running));
+            assert!(evidence.result.is_none());
+            assert!(
+                rpc::serve(&journal, &request.pc_id, &request, |_| panic!("replayed")).is_err()
+            );
+        }
+    }
+}
 #[test]
 fn registry_failure_uses_cache_and_missing_cache_refuses_before_cleanup() {
     let mut f = fake();

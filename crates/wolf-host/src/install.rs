@@ -427,7 +427,7 @@ fn recipes(request: &InstallRequest) -> io::Result<Vec<Recipe>> {
             || !initial_paths.insert(&initial.path)
             || initial.uid != 0
             || initial.gid != 0
-            || initial.mode != 0o644
+            || ![0o600, 0o644].contains(&initial.mode)
             || initial.bytes.len() > 2 * 1024 * 1024
         {
             return Err(fail("invalid bootstrap file authority"));
@@ -2236,7 +2236,7 @@ mod root_fixture_tests {
             .join(&fixture.request.policy.wolf_config.relative_path);
         fs::remove_file(&config).unwrap();
         fs::remove_file(&fixture.request.policy.compose_file).unwrap();
-        fixture.request.initial_files=vec![InitialFile{path:config.clone(),bytes:b"config_version=7\nuuid=\"new-server\"\n".to_vec(),uid:0,gid:0,mode:0o644},InitialFile{path:fixture.request.policy.compose_file.clone(),bytes:serde_json::to_vec(&serde_json::json!({"services":{"wolf":{"image":fixture.request.policy.image_ref,"container_name":"wolf","pull_policy":"never"}}})).unwrap(),uid:0,gid:0,mode:0o644}];
+        fixture.request.initial_files=vec![InitialFile{path:config.clone(),bytes:b"config_version=7\nuuid=\"new-server\"\n".to_vec(),uid:0,gid:0,mode:0o600},InitialFile{path:fixture.request.policy.compose_file.clone(),bytes:serde_json::to_vec(&serde_json::json!({"services":{"wolf":{"image":fixture.request.policy.image_ref,"container_name":"wolf","pull_policy":"never"}}})).unwrap(),uid:0,gid:0,mode:0o600}];
         let plan = preflight_with(&fixture.request, &fixture.environment).unwrap();
         apply_with(&plan, &fixture.environment).unwrap();
         let paired =
