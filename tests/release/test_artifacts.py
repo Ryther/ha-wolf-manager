@@ -1,5 +1,8 @@
 """Artifact redirect safety, ZIP preservation and metadata coherence."""
 import io
+import runpy
+import sys
+import secrets
 import email.message
 from pathlib import Path
 import tempfile
@@ -91,3 +94,83 @@ class ArtifactTests(unittest.TestCase):
             a.extract(source, out)
             self.assertEqual(source.read_bytes(), original)
             self.assertEqual((out / 'a/b').read_bytes(), b'bytes')
+
+
+class ArtifactCliTests(unittest.TestCase):
+    def test_cli_metadata_refusal_reports_only_controlled_stage_and_code(self):
+        token = secrets.token_urlsafe(32)
+        authority = mock.Mock()
+        authority.get_json.side_effect = v.VerificationError('authority_unavailable')
+        arguments = ['artifacts', '--run-id', '42', '--name', 'fixture', '--output', '_tmp/fixture']
+        with mock.patch.object(sys, 'argv', arguments), mock.patch.dict(
+                'os.environ', {'GITHUB_TOKEN': token}), mock.patch.object(
+                v, 'GitHubAuthority', return_value=authority), self.assertRaises(SystemExit) as exit:
+            runpy.run_module('scripts.ci.artifacts', run_name='__main__')
+        self.assertIn('stage=metadata', str(exit.exception))
+        self.assertIn('code=authority_unavailable', str(exit.exception))
+        self.assertNotIn(token, str(exit.exception))
+
+    def test_cli_raw_transport_failure_does_not_print_signed_url_or_credentials(self):
+        token = secrets.token_urlsafe(32)
+        authority = mock.Mock()
+        authority.get_json.side_effect = OSError('Bearer ' + token + ' https://example.invalid/?sig=' + token)
+        arguments = ['artifacts', '--run-id', '42', '--name', 'fixture', '--output', '_tmp/fixture']
+        with mock.patch.object(sys, 'argv', arguments), mock.patch.dict(
+                'os.environ', {'GITHUB_TOKEN': token}), mock.patch.object(
+                v, 'GitHubAuthority', return_value=authority), self.assertRaises(SystemExit) as exit:
+            runpy.run_module('scripts.ci.artifacts', run_name='__main__')
+        message = str(exit.exception)
+        for private in ('Bearer', token, 'https://', 'sig=' + token):
+            self.assertNotIn(private, message)
+        self.assertIn('stage=metadata', message)
+        self.assertIn('type=OSError', message)
+
+    def test_cli_preserves_original_zip_extraction_and_metadata(self):
+        token = secrets.token_urlsafe(32)
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, 'w') as archive:
+            archive.writestr('a/b', b'fixture bytes')
+        data = buffer.getvalue()
+        info = {'id': 42, 'expired': False, 'size_in_bytes': len(data),
+                'digest': 'sha256:' + v.sha256(data)}
+        def download(_authority, metadata, output):
+            self.assertEqual(metadata, info)
+            output.write_bytes(data)
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'subject'
+            arguments = ['artifacts', '--run-id', '42', '--name', 'fixture',
+                         '--output', str(output), '--extract']
+            with mock.patch.object(sys, 'argv', arguments), mock.patch.dict(
+                    'os.environ', {'GITHUB_TOKEN': token}), mock.patch.object(
+                    a, 'find', return_value=info), mock.patch.object(a, 'download', side_effect=download):
+                a.main()
+            self.assertEqual(output.with_suffix('.zip').read_bytes(), data)
+            self.assertEqual((output / 'a/b').read_bytes(), b'fixture bytes')
+            self.assertEqual(v.json_bytes(output.with_suffix('.metadata.json').read_bytes()), info)
+
+    def test_cli_reports_exact_failed_stage_without_exposing_exception_payload(self):
+        token = secrets.token_urlsafe(32)
+        private = 'Bearer ' + token + ' https://example.invalid/?sig=' + token
+        for stage, target, error, expected in (
+                ('metadata', 'find', KeyError(private), 'type=KeyError'),
+                ('download', 'download', ValueError(private), 'type=ValueError'),
+                ('download', 'download', v.VerificationError('artifact_download_digest'), 'code=artifact_download_digest'),
+                ('extract', 'extract', v.VerificationError('archive_path'), 'code=archive_path'),
+                ('metadata-write', 'write_bytes', OSError(private), 'type=OSError'),
+                ('metadata', 'find', v.VerificationError(private), 'code=verification_refused')):
+            with self.subTest(stage=stage, target=target, expected=expected), tempfile.TemporaryDirectory() as directory:
+                arguments = ['artifacts', '--run-id', '42', '--name', 'fixture',
+                             '--output', str(Path(directory) / 'subject'), '--extract']
+                with mock.patch.object(sys, 'argv', arguments), mock.patch.dict(
+                        'os.environ', {'GITHUB_TOKEN': token}), mock.patch.object(
+                        a, 'find', return_value={}) as find, mock.patch.object(a, 'download') as download, mock.patch.object(
+                        a, 'extract') as extract, mock.patch.object(Path, 'write_bytes') as write:
+                    {'find': find, 'download': download, 'extract': extract,
+                     'write_bytes': write}[target].side_effect = error
+                    with self.assertRaises(SystemExit) as exit:
+                        a.main()
+                message = str(exit.exception)
+                self.assertIn('stage=' + stage, message)
+                self.assertIn(expected, message)
+                for value in ('Bearer', token, 'https://', 'sig=' + token):
+                    self.assertNotIn(value, message)

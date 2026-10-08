@@ -36,6 +36,12 @@ the verified API version 2026-03-10. Redirects are refused, preventing forwarded
 API credentials from leaving that origin. CLI failures emit a fixed refusal
 message; no raw API errors or credential values are printed.
 
+`artifacts.py` reports the fixed phase of a refused receive (metadata, download,
+extract or metadata-write) and an allowlisted refusal identifier or exception
+class. Unknown exception content is omitted, including signed URLs, tokens and
+raw transport errors. It never retries an identity or digest refusal or treats
+an unavailable artifact as successful evidence.
+
 ## Producer handoff
 
 The allowlisted successful candidate run must expose one immutable workflow
@@ -134,6 +140,9 @@ credentials and is not compiled into the product. Vendored library sources and
 owned tests remain scanned; owned authentication fixtures generate credentials
 at runtime. Trivy's scratch-image scan complements Cargo.lock auditing;
 it does not substitute for dependency analysis of statically compiled Rust.
+CodeQL uploads raw SARIF diagnostics even when its gate fails. A failed gate
+still skips the success report and blocks both the job and publication; a
+diagnostic artifact cannot certify a successful security check.
 
 The add-on schema is the pinned community app schema, with its upstream license
 retained. Container checks establish restricted SSH/policy and syntax behavior,

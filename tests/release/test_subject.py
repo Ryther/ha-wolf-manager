@@ -6,12 +6,35 @@ import tempfile
 from pathlib import Path
 import unittest
 from unittest import mock
+import yaml
 from scripts.ci import check_subject as c, security_gate as s
 from scripts.ci import producer as p, verify_candidate as v
 from test_candidate import fixture, encoded, SHA
 
 
 class SubjectTests(unittest.TestCase):
+    def test_codeql_failure_retains_sarif_without_success_receipt_or_failure_bypass(self):
+        root = Path(__file__).resolve().parents[2]
+        for name in ('candidate.yaml', 'pull-request.yaml'):
+            with self.subTest(workflow=name):
+                workflow = yaml.safe_load((root / '.github/workflows' / name).read_text())
+                job = workflow['jobs']['codeql']
+                steps = job['steps']
+                gate = next(index for index, step in enumerate(steps)
+                            if 'scripts.ci.security_gate' in step.get('run', ''))
+                receipt = next(index for index, step in enumerate(steps)
+                               if 'report --name codeql' in step.get('run', ''))
+                upload = steps[-1]
+                self.assertIn('actions/upload-artifact@', upload['uses'])
+                self.assertEqual(upload.get('if'), 'always()')
+                self.assertIn('evidence-codeql-', upload['with']['name'])
+                self.assertEqual(upload['with']['path'], '_tmp/evidence')
+                self.assertLess(gate, receipt)
+                self.assertLess(receipt, len(steps) - 1)
+                self.assertNotIn('if', steps[receipt])
+                self.assertNotIn('continue-on-error', job)
+                self.assertTrue(all(not step.get('continue-on-error') for step in steps))
+
     def extension_report(self, severity='9.8'):
         return {'version': '2.1.0', 'runs': [{'tool': {
             'driver': {'name': 'CodeQL', 'rules': []},
