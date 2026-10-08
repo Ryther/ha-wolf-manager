@@ -106,6 +106,16 @@ fn read_admin(path: &Path) -> io::Result<Vec<u8>> {
     }
     Ok(bytes)
 }
+fn public_key_input(bytes: Vec<u8>) -> io::Result<String> {
+    let mut value = String::from_utf8(bytes).map_err(|_| invalid())?;
+    // ssh-keygen writes one terminal line ending; retain all other bytes for validation.
+    if value.ends_with("\r\n") {
+        value.truncate(value.len() - 2);
+    } else if value.ends_with('\n') {
+        value.truncate(value.len() - 1);
+    }
+    Ok(value)
+}
 fn read_json<T: DeserializeOwned>(path: &Path) -> io::Result<T> {
     serde_json::from_slice(&read_admin(path)?).map_err(|_| invalid())
 }
@@ -176,7 +186,7 @@ pub fn run(cli: Cli) -> io::Result<()> {
             let policy: RootPolicy = read_json(&policy)?;
             let authorized_public_keys = authorized_key
                 .iter()
-                .map(|p| String::from_utf8(read_admin(p)?).map_err(|_| invalid()))
+                .map(|p| public_key_input(read_admin(p)?))
                 .collect::<io::Result<Vec<_>>>()?;
             let initial_files = match mode {
                 Mode::Install => crate::defaults::initial_files(&policy)?,
@@ -351,4 +361,39 @@ fn sanitize_log(line: &str) -> String {
         .filter(|c| !c.is_control())
         .take(4096)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::public_key_input;
+    use crate::install::{render_privilege_templates, validate_public_key};
+
+    const KEY: &str =
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA operator";
+
+    #[test]
+    fn ssh_public_key_file_accepts_one_optional_terminal_line_ending() {
+        let expected = render_privilege_templates(&[KEY.into()]).unwrap();
+        for ending in ["", "\n", "\r\n"] {
+            let decoded = public_key_input(format!("{KEY}{ending}").into_bytes()).unwrap();
+            assert_eq!(render_privilege_templates(&[decoded]).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn public_key_file_preserves_refusal_of_multiline_blank_and_control_input() {
+        for input in [
+            format!("{KEY}\n{KEY}\n"),
+            format!("{KEY}\n\n"),
+            format!("{KEY}\r"),
+            format!("{KEY}\t\n"),
+            format!("{KEY}\0\n"),
+            "\n".into(),
+            "\r\n".into(),
+        ] {
+            let decoded = public_key_input(input.into_bytes()).unwrap();
+            assert!(validate_public_key(&decoded).is_err());
+        }
+        assert!(public_key_input(vec![0xff]).is_err());
+    }
 }
