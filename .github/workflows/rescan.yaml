@@ -1,0 +1,45 @@
+name: Rescan published image
+'on':
+  schedule:
+    - cron: '31 6 * * 1'
+  workflow_dispatch: {}
+permissions:
+  contents: read
+jobs:
+  published-image:
+    if: github.repository == 'Ryther/ha-wolf-manager' && github.ref == 'refs/heads/main' && vars.RELEASE_PUBLISH_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Resolve the public release image
+        id: subject
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          mkdir -p _tmp/published
+          tag=$(gh release view --repo Ryther/ha-wolf-manager --json tagName --jq .tagName)
+          gh release download "$tag" --repo Ryther/ha-wolf-manager --pattern publication.json --dir _tmp/published
+          reference=$(python -m scripts.ci.published_subject --record _tmp/published/publication.json --tag "$tag")
+          printf 'image=%s\n' "$reference" >> "$GITHUB_OUTPUT"
+      - name: Scan the published digest on both platforms
+        env:
+          IMAGE_REFERENCE: ${{ steps.subject.outputs.image }}
+        run: |
+          set -eu
+          mkdir -p _tmp/reports
+          status=0
+          for architecture in amd64 arm64; do
+            docker run --rm --mount "type=bind,source=$PWD/_tmp/reports,target=/reports" ghcr.io/aquasecurity/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa image --platform "linux/$architecture" --scanners vuln --severity HIGH,CRITICAL --exit-code 1 --format json --output "/reports/trivy-$architecture.json" "$IMAGE_REFERENCE" || status=1
+          done
+          exit "$status"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: published-image-rescan-${{ github.run_id }}
+          path: _tmp/reports
+          if-no-files-found: warn
+          retention-days: 30

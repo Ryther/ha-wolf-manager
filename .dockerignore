@@ -1,0 +1,6 @@
+**
+!Dockerfile
+!LICENSE
+!build/
+!build/ha-wolf-manager
+!build/wolf-manager-host

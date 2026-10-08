@@ -1,0 +1,31 @@
+name: HA Wolf Manager
+version: 0.1.0
+slug: ha_wolf_manager
+description: Manage multiple Wolf PCs, Steam settings, and Home Assistant controls.
+url: https://github.com/Ryther/ha-wolf-manager
+arch:
+  - amd64
+  - aarch64
+image: ghcr.io/ryther/ha-wolf-manager
+startup: application
+boot: auto
+init: false
+ingress: true
+ingress_port: 8099
+panel_icon: mdi:gamepad-variant
+panel_title: Wolf Manager
+panel_admin: true
+hassio_api: true
+hassio_role: default
+services:
+  - mqtt:need
+backup: cold
+stage: experimental
+environment:
+  WOLF_MODE: ingress
+options:
+  topic_base: wolf-manager/v1
+  discovery_prefix: homeassistant
+schema:
+  topic_base: str
+  discovery_prefix: str
