@@ -11,3 +11,7 @@ Central integrator owns workspace Cargo.toml/Cargo.lock, AGENTS.md, README, publ
 - Pure topic/discovery builders include PC identity and app ID. Exact ASCII ON/OFF validator rejects retained messages and malformed payloads.
 
 Keep modules ids/settings/rpc/operations/catalog/mqtt/error small and independently tested. All downstream components use these public contracts. Pure core has no filesystem/network/process calls. The manager and host crates remain empty scaffolds until their implementation tasks run; do not mistake compilation for runtime evidence.
+
+## Frontend/manager boundary
+
+Vanilla HTML/CSS/JavaScript in web/index.html, web/app.js, web/styles.css; no runtime Node service. Manager embeds those assets and substitutes escaped __WOLF_BASE__ (absolute normalized path ending slash) and __WOLF_MODE__ (standalone/ingress) in meta/base elements. Prefix-safe same-origin API base is new URL('api/v1/', application base). Standalone challenge/login/bootstrap/cookies and Ingress X-Wolf-Origin nonce follow public API contract. No credentials in localStorage. Dashboard themes are self-contained CSS dark/light tokens, with neutral panels and a mint accent; shared metadata remains central. Root package.json/package-lock owns verified Playwright 1.64.0 dev dependency. UI worker owns web/** only; test outputs stay ignored. Use exact documented APIs; any contract ambiguity goes to parent rather than introducing an alternate route.

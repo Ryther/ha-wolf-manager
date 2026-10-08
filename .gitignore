@@ -12,3 +12,8 @@
 /.ux-review-required.md
 **/__pycache__/
 *.pyc
+
+# Frontend development dependencies and generated browser evidence.
+/node_modules/
+/test-results/
+/playwright-report/
