@@ -4,6 +4,33 @@ use std::{
 };
 use tempfile::tempdir;
 use wolf_manager_host::transactions::{Grant, TransactionStore};
+#[test]
+fn transformed_writes_refuse_a_newer_preimage_before_creating_backups() {
+    let root = tempdir().unwrap();
+    let backups = tempdir().unwrap();
+    fs::set_permissions(backups.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    fs::write(root.path().join("config.vdf"), b"original").unwrap();
+    let grant = Grant::open(root.path()).unwrap();
+    let store = TransactionStore::open(backups.path()).unwrap();
+    let original = grant.read("config.vdf").unwrap();
+    fs::write(root.path().join("config.vdf"), b"legitimate newer settings").unwrap();
+    assert!(
+        store
+            .apply_expected(&grant, "config.vdf", &original, b"transformed old settings")
+            .is_err()
+    );
+    assert_eq!(
+        fs::read(root.path().join("config.vdf")).unwrap(),
+        b"legitimate newer settings"
+    );
+    assert!(store.transactions().unwrap().is_empty());
+    let expected = grant.read("config.vdf").unwrap();
+    let transaction = store
+        .apply_expected(&grant, "config.vdf", &expected, b"managed settings")
+        .unwrap();
+    store.restore(&grant, &transaction).unwrap();
+    assert_eq!(fs::read(root.path().join("config.vdf")).unwrap(), expected);
+}
 
 #[test]
 fn apply_and_restore_preserve_original_bytes() {

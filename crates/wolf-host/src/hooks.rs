@@ -11,6 +11,26 @@ pub fn apply(
     overlays: &[Overlay<'_>],
     quiescent: impl Fn() -> io::Result<()>,
 ) -> io::Result<()> {
+    apply_inner(store, overlays, None, quiescent)
+}
+/// Bind each transformed overlay to the exact bytes used to produce it.
+pub fn apply_expected(
+    store: &TransactionStore,
+    overlays: &[Overlay<'_>],
+    expected: &[Vec<u8>],
+    quiescent: impl Fn() -> io::Result<()>,
+) -> io::Result<()> {
+    if overlays.len() != expected.len() {
+        return Err(io::Error::other("overlay preimage count differs"));
+    }
+    apply_inner(store, overlays, Some(expected), quiescent)
+}
+fn apply_inner(
+    store: &TransactionStore,
+    overlays: &[Overlay<'_>],
+    expected: Option<&[Vec<u8>]>,
+    quiescent: impl Fn() -> io::Result<()>,
+) -> io::Result<()> {
     let _lock = store.hook_lock()?;
     quiescent()?;
     if !store.active()?.is_empty() {
@@ -18,15 +38,20 @@ pub fn apply(
     }
     // Parse/transform work happened before this call; validate every target before writes.
     let mut changed = Vec::new();
-    for overlay in overlays {
-        if overlay.grant.read(overlay.relative)? != overlay.bytes {
-            changed.push(overlay);
+    for (index, overlay) in overlays.iter().enumerate() {
+        let before = overlay.grant.read(overlay.relative)?;
+        if expected.is_some_and(|expected| expected[index] != before) {
+            return Err(io::Error::other("target differs from transformed preimage"));
+        }
+        if before != overlay.bytes {
+            changed.push((overlay, before));
         }
     }
     let mut applied = Vec::new();
-    for overlay in changed {
-        let result =
-            quiescent().and_then(|()| store.apply(overlay.grant, overlay.relative, &overlay.bytes));
+    for (overlay, before) in changed {
+        let result = quiescent().and_then(|()| {
+            store.apply_expected(overlay.grant, overlay.relative, &before, &overlay.bytes)
+        });
         match result {
             Ok(id) => applied.push((overlay.grant, id)),
             Err(error) => {

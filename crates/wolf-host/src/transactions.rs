@@ -460,13 +460,37 @@ impl TransactionStore {
         }
         Ok(bytes)
     }
+    pub fn apply_expected(
+        &self,
+        grant: &Grant,
+        relative: &str,
+        expected: &[u8],
+        bytes: &[u8],
+    ) -> io::Result<Uuid> {
+        if expected.len() > LIMIT {
+            return Err(error("oversized expected preimage"));
+        }
+        self.apply_inner(grant, relative, Some(expected), bytes)
+    }
     pub fn apply(&self, grant: &Grant, relative: &str, bytes: &[u8]) -> io::Result<Uuid> {
+        self.apply_inner(grant, relative, None, bytes)
+    }
+    fn apply_inner(
+        &self,
+        grant: &Grant,
+        relative: &str,
+        expected: Option<&[u8]>,
+        bytes: &[u8],
+    ) -> io::Result<Uuid> {
         let _lock = self.lock()?;
         if bytes.len() > LIMIT || self.recovery_pending()? {
             return Err(error("unresolved recovery or oversized data"));
         }
         let (parent, name) = grant.parent(relative)?;
         let (before, metadata, attrs) = grant.read_file(&parent, &name)?;
+        if expected.is_some_and(|expected| expected != before) {
+            return Err(error("target differs from transformed preimage"));
+        }
         let parent_metadata = parent.metadata()?;
         for id in self.transactions()? {
             let previous = self.load(&id)?;
