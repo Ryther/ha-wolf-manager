@@ -17,3 +17,7 @@
 /node_modules/
 /test-results/
 /playwright-report/
+
+# Private development proposals and local workflow state.
+/docs/superpowers/
+/.superpowers/

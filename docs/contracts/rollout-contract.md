@@ -28,7 +28,7 @@ Release Please is the sole version authority, using the simple release strategy 
 
 Untrusted PR jobs get no persistent release or Sonar secrets. Trusted jobs use least privilege and job-scoped RELEASE_PLEASE_TOKEN, SONAR_TOKEN and GITHUB_TOKEN; values are never exported into evidence. Sonar waits for the exact candidate analysis/quality gate. CodeQL, secret and vulnerability gates apply to the same candidate. Verify GHCR visibility, Actions permissions and required checks when workflows exist. Optional Pages is controlled by DOCS_PAGES_ENABLED. Dependency/action/image versions are primary-source verified when selected.
 
-Retain previous binaries/images and verified SQLite/host backups. Never blindly downgrade a newer database schema. Add-on/Docker state mounts survive upgrades. Record local, simulated, container-only and actual OS/GPU evidence separately. GitHub checks and actual publication are implementation completion gates; no wave verdict claims they ran.
+Retain previous binaries/images and verified SQLite/host backups. Never blindly downgrade a newer database schema. Add-on/Docker state mounts survive upgrades. Record local, simulated, container-only and actual OS/GPU evidence separately. Verify actual GitHub checks and published artifact identities before claiming a release is available.
 
 ## Trusted acceptance authority
 

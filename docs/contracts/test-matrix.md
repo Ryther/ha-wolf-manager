@@ -14,7 +14,7 @@
 | Public guides/skills | Follow add-on/Docker/SSH/HA-control/voice/recovery instructions, correct expected UI/output, canonical/Claude skill identity. | Disposable observed procedures and MkDocs/link checks; no claim guide procedures ran because unit tests passed. |
 | CI/release | Conventional commits, formatting/Clippy/tests, CodeQL, Gitleaks, Sonar correct report/exact SHA, image/Cargo vulnerability gate, candidate bytes/version identity and serialized drafts. | Local workflow/script contracts plus actual trusted GitHub checks when implemented. |
 
-No product tests have run yet. Wave review proves only planning readiness, never the table's runtime outcomes. Actual evidence records commands, versions, scope, observed result and limitation; never copy raw household secrets or payloads into public reports.
+Each requirement needs executed checks appropriate to its boundary. Record commands, versions, scope, observed results and limitations in test or release evidence. Focused fixtures do not establish direct-OS or GPU streaming compatibility. Never include household secrets or raw private payloads.
 
 ## Domain-pass additional acceptance
 
