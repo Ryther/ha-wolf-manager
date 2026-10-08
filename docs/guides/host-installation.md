@@ -85,3 +85,9 @@ sudo /root/wolf-release/install.sh /root/wolf-release/bin/wolf-manager-host inst
 ```
 
 Rollback checks recorded identities and preimages. Preserve backups when it refuses; do not force-remove files that changed after installation. Installation rollback does not substitute for Steam saves, manager state or Wolf backups.
+
+## Confirm generated Steam and icon mappings
+
+Each authorized `container_userdata_paths` destination must end in `userdata`. Its parent determines the corresponding `config/config.vdf` destination; the toolkit explicitly binds the policy's real host `config_vdf` there. Verify this mapping against the runner's actual Steam layout, not just its userdata mount. Conflicting pre-existing runner mounts are rejected so a generated game cannot silently read a different Steam profile. Include actual helper executables in `steam_executables`; naming only a shell wrapper does not describe every writer. Native Steam process names for the Steam UID are additionally refused conservatively.
+
+The icon cache must be reachable through the single authorized Wolf configuration-root bind mapping. The toolkit validates that no other mount shadows the cache destination, converts bounded source images to PNG and retains valid cached entries. Do not add overlapping mounts or create untrusted files at generated cache paths to work around a missing cover.

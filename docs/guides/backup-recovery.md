@@ -58,3 +58,33 @@ docker compose up -d wolf-manager
 ```
 
 The command takes an exclusive recovery lock, creates a verified backup before changing the account, and revokes existing sessions/challenges. Store the resulting backup securely. Remove the temporary reset-password file only after confirming the new login and after deciding its retention according to your own secret policy. Ingress authentication remains Home Assistant's responsibility.
+
+## Import the prototype add-on's settings offline
+
+This is an explicit initial migration, separate from bundle restore. Export the prototype's settings JSON to a protected regular file and retain its original copy. The supported source is the legacy object containing `parameters`, `games` and `debug`; it does not contain a top-level `version` field. Select the format explicitly with `--format-version 1`. Unknown format versions are rejected. The file must be an absolute path inside the container, at most 4 MiB, owned by root or the executing UID, mode-private, with no symlink aliases or hard links.
+
+Initialize the new manager, register **only the intended PC**, and copy its actual **Desired** revision from the dashboard before stopping the manager. The example PC is `gaming-pc`; replace it with your registered immutable ID. The entire database must contain exactly one PC, including archived records: archiving another PC does not make this migration safe because definitions and diagnostic settings are global. Resolve queued/running/uncertain mutations before importing.
+
+Put the protected export at `legacy/settings.json` in the deployment directory. Enter the copied desired revision into a shell variable, then preview without mutating manager state:
+
+```sh
+read -r EXPECTED_REVISION
+docker compose stop wolf-manager
+docker compose run --rm --no-deps \
+  --volume "$PWD/legacy:/legacy:ro" wolf-manager --data /data \
+  import-preview --source /legacy/settings.json --format-version 1
+```
+
+Review the printed normalized `settings` carefully. The parser preserves valid long legacy labels/descriptions, normalizes IDs and legacy values, preserves the order of valid selected parameters and removes duplicate selections. Invalid legacy entries may be omitted by normalization; a definition exceeding hard transport limits refuses the import rather than silently truncating it. Confirm that all settings you intend to retain are present before applying.
+
+```sh
+docker compose run --rm --no-deps \
+  --volume "$PWD/legacy:/legacy:ro" wolf-manager --data /data \
+  import-legacy --source /legacy/settings.json --format-version 1 \
+  --pc gaming-pc --expected-revision "$EXPECTED_REVISION"
+docker compose up -d wolf-manager
+```
+
+A stale revision or another active mutation refuses the import. Existing desired games/definitions are merged: matching imported IDs are updated, unrelated current entries remain, and the global diagnostic setting comes from the source. Before the atomic SQLite transaction, the tool creates a verified SQLite backup and retains the exact export as a private `legacy-source-<UUID>.json` file in the manager data directory. Keep both as recovery evidence. Success prints the new desired revision; verify it in the dashboard after restart.
+
+Neither command sends host RPC, stages settings, edits Steam/Wolf files or starts a PC. Apply the imported desired state only through an explicit later Stage/Start/Restart after reviewing the host configuration. These commands do not migrate prototype SSH credentials, identities, pairings, broker settings or automation entity IDs. Retain those separately and enroll the new restricted manager identity.
