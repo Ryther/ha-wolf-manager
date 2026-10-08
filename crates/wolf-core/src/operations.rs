@@ -84,6 +84,22 @@ pub fn reconcile_children(
     {
         return unknown();
     }
+    let valid_stage_plan = children.len() == 2
+        && children[0].kind == OperationKind::ApplySettings
+        && matches!(
+            children[1].kind,
+            OperationKind::Start | OperationKind::Restart
+        );
+    if children.len() != 1 && !valid_stage_plan {
+        return unknown();
+    }
+    if observations.iter().any(|o| {
+        !children.iter().any(|child| {
+            child.request_id == o.request_id && child.dispatch_phase != DispatchPhase::NotDispatched
+        })
+    }) {
+        return unknown();
+    }
     let mut ids = std::collections::BTreeSet::new();
     let mut ordinals = std::collections::BTreeSet::new();
     let mut failed = false;
@@ -137,7 +153,7 @@ pub fn reconcile_children(
     if failed || undispatched {
         return Reconciliation {
             state: OperationState::Failed,
-            code: Some(if stage_succeeded && !failed {
+            code: Some(if stage_succeeded && !failed && valid_stage_plan {
                 "primary_not_dispatched"
             } else {
                 "child_failed"

@@ -64,10 +64,18 @@ impl Default for Settings {
     }
 }
 impl ParameterDefinition {
+    /// Bounds for newly submitted API definitions; imported legacy labels and
+    /// descriptions remain intact in desired settings and canonical revisions.
+    pub fn validate_api_input(&self) -> Result<(), SafeError> {
+        self.validate()?;
+        if self.label.len() > 256 || self.description.len() > 4096 {
+            return Err(SafeError::validation());
+        }
+        Ok(())
+    }
+
     pub fn validate(&self) -> Result<(), SafeError> {
         if self.label.trim().is_empty()
-            || self.label.len() > 256
-            || self.description.len() > 4096
             || self.launch_options.trim().is_empty()
             || self.launch_options.len() > 4096
             || self.launch_options.contains(['\r', '\n', '\0'])
@@ -146,9 +154,16 @@ impl Settings {
                         .trim()
                         .into(),
                 };
-                if definition.validate().is_ok() {
-                    result.parameters.insert(id, definition);
+                if definition.label.is_empty()
+                    || definition.launch_options.is_empty()
+                    || definition.launch_options.contains(['\r', '\n', '\0'])
+                {
+                    continue;
                 }
+                // A valid prototype definition outside a hard transport limit
+                // refuses the complete migration instead of dropping its data.
+                definition.validate()?;
+                result.parameters.insert(id, definition);
             }
         }
         if let Some(games) = object.get("games").and_then(serde_json::Value::as_object) {

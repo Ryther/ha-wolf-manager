@@ -167,6 +167,26 @@ impl RpcResponse {
             return Err(SafeError::validation());
         }
         if let Some(result) = &self.result {
+            match (&request.operation, result) {
+                (RpcOperation::ApplySettings(payload), RpcResult::Applied { staged_revision })
+                    if staged_revision != &payload.revision =>
+                {
+                    return Err(SafeError::new("revision_mismatch"));
+                }
+                (RpcOperation::RequestStatus(payload), RpcResult::RequestStatus(journal))
+                    if journal.request_id != payload.original_request_id
+                        || journal.pc_id != request.pc_id =>
+                {
+                    return Err(SafeError::validation());
+                }
+                (RpcOperation::Preflight(_), RpcResult::Preflight(capabilities))
+                    if capabilities.version != 1 || capabilities.pc_id != request.pc_id =>
+                {
+                    return Err(SafeError::validation());
+                }
+                _ => {}
+            }
+
             let matches = matches!(
                 (&request.operation, result),
                 (RpcOperation::Preflight(_), RpcResult::Preflight(_))

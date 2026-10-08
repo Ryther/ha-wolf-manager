@@ -317,3 +317,151 @@ fn unsupported_proton_selection_refuses_before_dispatch() {
     );
     assert!(settings.validate_capabilities(&capabilities).is_err());
 }
+#[test]
+fn contradictory_and_unowned_journal_evidence_remains_unknown() {
+    let stage = child(0, OperationKind::ApplySettings, DispatchPhase::Sent);
+    let primary = child(1, OperationKind::Restart, DispatchPhase::NotDispatched);
+    assert_eq!(
+        reconcile_children(
+            &[stage.clone(), primary.clone()],
+            &[success(&stage), success(&primary)]
+        )
+        .state,
+        OperationState::UnknownInterrupted
+    );
+    let stranger = child(2, OperationKind::Stop, DispatchPhase::Sent);
+    assert_eq!(
+        reconcile_children(
+            &[stage.clone(), primary],
+            &[success(&stage), success(&stranger)]
+        )
+        .state,
+        OperationState::UnknownInterrupted
+    );
+}
+#[test]
+fn primary_not_dispatched_is_only_a_stage_then_lifecycle_plan() {
+    let stage = child(0, OperationKind::ApplySettings, DispatchPhase::Sent);
+    let unrelated = child(1, OperationKind::Status, DispatchPhase::NotDispatched);
+    assert_eq!(
+        reconcile_children(&[stage.clone(), unrelated], &[success(&stage)]).state,
+        OperationState::UnknownInterrupted
+    );
+}
+fn request(operation: RpcOperation) -> RpcRequest {
+    RpcRequest {
+        version: 1,
+        request_id: uuid::Uuid::from_u128(5),
+        pc_id: PcId::new("pc").unwrap(),
+        operation,
+    }
+}
+fn response(request: &RpcRequest, result: RpcResult) -> RpcResponse {
+    RpcResponse {
+        version: 1,
+        request_id: request.request_id,
+        pc_id: request.pc_id.clone(),
+        ok: true,
+        result: Some(result),
+        error: None,
+    }
+}
+#[test]
+fn rpc_reply_data_is_bound_to_request_identity_and_revision() {
+    let settings = Settings::default();
+    let revision = settings.revision().unwrap();
+    let req = request(RpcOperation::ApplySettings(ApplySettingsPayload {
+        settings,
+        revision,
+    }));
+    assert!(
+        response(
+            &req,
+            RpcResult::Applied {
+                staged_revision: Revision::new("0".repeat(64)).unwrap()
+            }
+        )
+        .validate_for(&req)
+        .is_err()
+    );
+    let original = child(0, OperationKind::Stop, DispatchPhase::Sent);
+    let req = request(RpcOperation::RequestStatus(RequestStatusPayload {
+        original_request_id: original.request_id,
+    }));
+    let mut journal = success(&original);
+    journal.request_id = uuid::Uuid::from_u128(99);
+    assert!(
+        response(&req, RpcResult::RequestStatus(journal))
+            .validate_for(&req)
+            .is_err()
+    );
+    let mut journal = success(&original);
+    journal.pc_id = PcId::new("other").unwrap();
+    assert!(
+        response(&req, RpcResult::RequestStatus(journal))
+            .validate_for(&req)
+            .is_err()
+    );
+    let req = request(RpcOperation::Preflight(EmptyPayload {}));
+    let capabilities = HostCapabilities {
+        version: 2,
+        pc_id: req.pc_id.clone(),
+        ready: true,
+        proton_cachyos: true,
+        reasons: vec![],
+    };
+    assert!(
+        response(&req, RpcResult::Preflight(capabilities))
+            .validate_for(&req)
+            .is_err()
+    );
+    let capabilities = HostCapabilities {
+        version: 1,
+        pc_id: PcId::new("other").unwrap(),
+        ready: true,
+        proton_cachyos: true,
+        reasons: vec![],
+    };
+    assert!(
+        response(&req, RpcResult::Preflight(capabilities))
+            .validate_for(&req)
+            .is_err()
+    );
+}
+#[test]
+fn error_decode_refuses_arbitrary_external_codes_and_messages() {
+    assert!(
+        serde_json::from_value::<SafeError>(json!({"code":"external","message":"secret token"}))
+            .is_err()
+    );
+    assert!(
+        serde_json::from_value::<SafeError>(
+            json!({"code":"validation_failed","message":"secret token"})
+        )
+        .is_err()
+    );
+    let error = SafeError::validation();
+    assert_eq!(
+        serde_json::from_slice::<SafeError>(&serde_json::to_vec(&error).unwrap()).unwrap(),
+        error
+    );
+    assert_eq!(
+        serde_json::to_value(SafeError::new("untrusted_code")).unwrap()["code"],
+        "internal_error"
+    );
+}
+#[test]
+fn explicit_legacy_import_preserves_long_valid_definitions_and_assignments() {
+    let label = "L".repeat(300);
+    let description = "D".repeat(5000);
+    let settings=Settings::import_legacy(&json!({"parameters":{"custom":{"label":label,"description":description,"launch_options":"SYNTHETIC=1 %command%"}},"games":{"42":{"parameters":["custom"]}}})).unwrap();
+    let custom = ParameterId::new("custom").unwrap();
+    assert_eq!(settings.parameters.get(&custom).unwrap().label.len(), 300);
+    assert_eq!(settings.parameters[&custom].description.len(), 5000);
+    assert_eq!(
+        settings.games[&AppId::new("42").unwrap()].parameters,
+        vec![custom]
+    );
+    assert!(settings.validate().is_ok());
+    assert!(settings.revision().is_ok());
+}
