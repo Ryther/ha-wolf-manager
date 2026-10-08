@@ -90,9 +90,9 @@ High line coverage does not replace real OS, protocol-ordering, crash-safety or
 streaming checks. A configured overall-coverage gate must be reported honestly
 when it fails.
 
-The frozen `bcbb742` analysis imported all 52 Rust, two JavaScript and 11 Python
+The frozen `5f8334a` analysis imported all 52 Rust, two JavaScript and 11 Python
 files with exact executable/uncovered-line counts. Combined coverage was
-**80.9% (12,545/15,516 executable lines)** and the local overall 80% gate passed.
+**81.0% (12,573/15,524 executable lines)** and the local overall 80% gate passed.
 The analysis had no unresolved maintainability findings, reported bugs,
 vulnerabilities or security hotspots; this does not establish absence of defects.
 
@@ -102,21 +102,26 @@ vulnerabilities or security hotspots; this does not establish absence of defects
 | Core contracts | 660 / 700 | 94.29% |
 | Host toolkit | 6,066 / 7,325 | 82.81% |
 | Manager | 4,416 / 5,879 | 75.11% |
-| Python release tooling | 1,039 / 1,237 | 84.00% |
+| Python release tooling | 1,067 / 1,245 | 85.70% |
 | Browser and Node coverage converter | 364 / 375 | 97.07% |
 
-Fresh Python execution passed 68 release tests; fresh Chromium execution passed
-34 browser journeys, including keyboard/mobile controls, stale revisions,
+Fresh Python execution passed 71 release tests. Chromium execution at `bcbb742`
+passed 34 browser journeys, including keyboard/mobile controls, stale revisions,
 authentication expiry, unknown observations and confirmed stopped hosts. V8
 execution includes the Node converter itself; imported coverage is not generated
-from an inventory of unexecuted code.
+from an inventory of unexecuted code. Browser assets, tests, converter and npm
+inputs were byte-identical at `5f8334a` before reusing the measured V8 report.
 
-Rust execution at `a09b30b` passed 220 standard tests and 22 explicitly selected
-broker/root cases; strict workspace Clippy passed. All 106 Rust/test, Cargo,
-toolchain and installer-template inputs were byte-identical at `bcbb742` before
-reusing those Rust reports. Integration-test files are excluded from the Rust
+Fresh Rust execution at `c5f06d3` passed 220 standard tests and all 22 explicitly
+selected broker/root cases; strict workspace Clippy passed. Rust/test, Cargo,
+toolchain and vendored dependency inputs were byte-identical at `5f8334a` before
+reusing those reports for the packaging-only revision. LLVM summary coverage
+was **78.87% (11,555/14,650 lines)**; its accounting differs from the imported
+LCOV denominator above. Neither report measures branch coverage.
+Integration-test files are excluded from the Rust
 source report; inline test modules remain included. The executable denominator
 therefore includes those inline tests and is not a production-only metric.
+Vendored third-party source is excluded from owned product coverage.
 Installer line coverage was 87.9%, coordinator 94.6%, SSH 94.0% and authentication
 93.9%. Manager CLI/bootstrap and failure branches still have uncovered lines;
 coverage is not a claim that every runtime path has been exercised.
