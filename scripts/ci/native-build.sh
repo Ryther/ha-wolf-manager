@@ -43,5 +43,6 @@ docker run --rm --network none "wolf-candidate:$architecture" --version | grep -
 rustup toolchain install 1.99.0 --profile minimal
 WOLF_TEST_SCRATCH_IMAGE="wolf-candidate:$architecture" \
 WOLF_TEST_SCRATCH_ROOT="$PWD/_tmp/candidate-runtime" \
+CARGO_TARGET_DIR="$PWD/_tmp/native-driver-target" \
   cargo +1.99.0 test --locked -p ha-wolf-manager --test runtime_candidate -- \
     --ignored --exact exact_scratch_native_tls_ssh_mqtt_state_health_and_sigterm
