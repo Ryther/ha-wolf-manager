@@ -88,7 +88,7 @@ fn compatibility_preserves_unmanaged_mappings() {
 }
 #[test]
 fn generated_sections_preserve_uuid_pairing_and_custom_apps_and_converge() {
-    let original = "config_version = 7\nuuid = 'existing-uuid'\n[[profiles]]\nname='custom-profile'\n[[profiles.apps]]\ntitle='Custom app'\n[profiles.apps.runner]\ntype='process'\nrun_cmd='true'\n";
+    let original = "config_version = 7\nuuid = 'existing-uuid'\n[[profiles]]\nid='user'\nname='custom-profile'\n[[profiles.apps]]\ntitle='Custom app'\n[profiles.apps.runner]\ntype='process'\nrun_cmd='true'\n";
     let generated = "[[profiles.apps]]\ntitle='Managed game'\n[profiles.apps.runner]\ntype='process'\nrun_cmd='true'";
     let once = steam::generated_sections(original, "", generated).unwrap();
     assert!(once.starts_with(original));
@@ -124,4 +124,28 @@ fn legacy_generated_sections_are_adopted_without_duplicate_apps() {
     assert!(result.contains("uuid='keep-identity'"));
     assert_eq!(result.matches("title='New generated'").count(), 1);
     assert!(!result.contains("MACHINE-SETUP"));
+}
+
+#[test]
+fn absent_markers_place_apps_in_their_correct_existing_profiles() {
+    let original = "config_version=7\nuuid='preserved'\n[[profiles]]\nid='moonlight-profile-id'\n[[profiles.apps]]\ntitle='Wolf UI'\n[[profiles]]\nid='user'\nname='User'\n[[profiles.apps]]\ntitle='Custom game'\n";
+    let result = steam::generated_sections(
+        original,
+        "[[profiles.apps]]\ntitle='Diagnostic'",
+        "[[profiles.apps]]\ntitle='Managed game'",
+    )
+    .unwrap();
+    let parsed: toml::Table = toml::from_str(&result).unwrap();
+    let profiles = parsed["profiles"].as_array().unwrap();
+    assert_eq!(profiles.len(), 2);
+    let titles = |index: usize| {
+        profiles[index]["apps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|app| app["title"].as_str().unwrap())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(titles(0), vec!["Wolf UI", "Diagnostic"]);
+    assert_eq!(titles(1), vec!["Custom game", "Managed game"]);
 }

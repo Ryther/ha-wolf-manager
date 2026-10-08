@@ -152,11 +152,38 @@ fn section(text: &str, name: &str, generated: &str) -> io::Result<String> {
         }
         result.replace_range(start.0..end.1, &replacement);
     } else {
-        if !result.ends_with('\n') {
-            result.push('\n');
+        let profile_id = match name {
+            "MOONLIGHT" => "moonlight-profile-id",
+            "USER" => "user",
+            _ => return Err(invalid()),
+        };
+        let headers = markers(text, "[[profiles]]");
+        let mut insertion = None;
+        for (index, header) in headers.iter().enumerate() {
+            let end = headers.get(index + 1).map_or(text.len(), |next| next.0);
+            let profile: toml::Table =
+                toml::from_str(&text[header.0..end]).map_err(|_| invalid())?;
+            let id = profile
+                .get("profiles")
+                .and_then(toml::Value::as_array)
+                .and_then(|profiles| profiles.first())
+                .and_then(|profile| profile.get("id"))
+                .and_then(toml::Value::as_str);
+            if id == Some(profile_id) {
+                if insertion.is_some() {
+                    return Err(invalid());
+                }
+                insertion = Some(end);
+            }
         }
-        result.push('\n');
-        result.push_str(&replacement);
+        let Some(position) = insertion else {
+            // Empty sections do not require inventing a missing profile.
+            if generated.is_empty() {
+                return Ok(result);
+            }
+            return Err(invalid());
+        };
+        result.insert_str(position, &format!("\n{replacement}"));
     }
     Ok(result)
 }
