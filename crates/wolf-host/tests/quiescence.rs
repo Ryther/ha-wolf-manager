@@ -2,7 +2,7 @@ use std::{
     path::PathBuf,
     process::{Child, Command, Stdio},
     sync::Mutex,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use wolf_manager_host::quiescence;
 static PROCESS_FIXTURES: Mutex<()> = Mutex::new(());
@@ -42,14 +42,23 @@ fn native_writer(name: &str) -> (tempfile::TempDir, PathBuf, WriterChild) {
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
-    let child = WriterChild(Some(child));
-    let comm =
-        std::fs::read_to_string(format!("/proc/{}/comm", child.0.as_ref().unwrap().id())).unwrap();
-    assert_eq!(
-        comm.trim_end(),
-        name,
-        "fixture must use the actual kernel process name"
-    );
+    let mut child = WriterChild(Some(child));
+    let comm_path = format!("/proc/{}/comm", child.0.as_ref().unwrap().id());
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let comm = std::fs::read_to_string(&comm_path)
+            .unwrap_or_else(|error| format!("<process name unavailable: {error}>"));
+        let alive = child.is_alive();
+        if alive && comm.trim_end() == name {
+            break;
+        }
+        assert!(
+            alive && Instant::now() < deadline,
+            "fixture must become a live native writer named {name}; observed {:?}, alive={alive}",
+            comm.trim_end()
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
     (fixture, executable, child)
 }
 
