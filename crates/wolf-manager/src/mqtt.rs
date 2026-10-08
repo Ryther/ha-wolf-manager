@@ -512,6 +512,11 @@ impl ManagerMqtt {
         if !self.connected {
             return Err(SafeError::new("internal_error"));
         }
+        tracing::info!(
+            code = "mqtt_shutdown_started",
+            count = self.pcs.len(),
+            "MQTT offline publication drain starting"
+        );
         self.closing = true;
         self.controls_ready = false;
         // Archive tombstones and prior publications must drain before final offline.
@@ -537,7 +542,14 @@ impl ManagerMqtt {
             self.client.try_disconnect().map_err(internal)?;
             loop {
                 match self.eventloop.poll().await {
-                    Ok(Event::Outgoing(rumqttc::Outgoing::Disconnect)) => return Ok(()),
+                    Ok(Event::Outgoing(rumqttc::Outgoing::Disconnect)) => {
+                        tracing::info!(
+                            code = "mqtt_shutdown_completed",
+                            count = self.pcs.len(),
+                            "MQTT offline acknowledgements drained and disconnect sent"
+                        );
+                        return Ok(());
+                    }
                     Ok(_) => {}
                     Err(e) => return Err(internal(e)),
                 }
@@ -713,7 +725,13 @@ impl ManagerMqtt {
             self.topics.manager_availability(self.instance),
             b"online".to_vec(),
             true,
-        )
+        )?;
+        tracing::info!(
+            code = "mqtt_replay_queued",
+            count = self.pcs.len(),
+            "Owned discovery and state replay queued"
+        );
+        Ok(())
     }
     /// Publish availability/state only from a confirmed SSH observation, never a command.
     pub fn observe_service(
@@ -940,6 +958,13 @@ impl ManagerMqtt {
         let event = match self.eventloop.poll().await {
             Ok(e) => e,
             Err(e) => {
+                if self.connected {
+                    tracing::warn!(
+                        code = "mqtt_connection_lost",
+                        count = self.pcs.len(),
+                        "MQTT connection lost; controls unavailable"
+                    );
+                }
                 self.controls_ready = false;
                 self.connected = false;
                 return Err(internal(e));
@@ -964,6 +989,11 @@ impl ManagerMqtt {
                 {
                     return Err(SafeError::new("forbidden"));
                 }
+                tracing::info!(
+                    code = "mqtt_connected",
+                    count = self.pcs.len(),
+                    "Fresh MQTT session connected; awaiting control subscriptions"
+                );
                 self.outbox.clear();
                 self.control_outbox.clear();
                 self.outbox_bytes = 0;
@@ -991,7 +1021,15 @@ impl ManagerMqtt {
                     .ok_or_else(|| SafeError::new("forbidden"))?;
                 if ack.return_codes.len()!=qos.len()||ack.return_codes.iter().zip(&qos).any(|(actual,expected)|!matches!(actual,SubscribeReasonCode::Success(qos) if qos==expected)){return Err(SafeError::new("forbidden"));}
                 if controls {
+                    let was_ready = self.controls_ready;
                     self.controls_ready = !self.closing;
+                    if self.controls_ready && !was_ready {
+                        tracing::info!(
+                            code = "mqtt_controls_ready",
+                            count = self.pcs.len(),
+                            "MQTT control subscription acknowledged"
+                        );
+                    }
                     Ok(Some(ManagerEvent::Connected))
                 } else {
                     Ok(None)

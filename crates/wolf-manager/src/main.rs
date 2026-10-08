@@ -6,6 +6,13 @@ use ha_wolf_manager::{
 fn main() {
     let mut cli = Cli::parse();
     let result = ha_wolf_manager::init::prepare(&mut cli).and_then(|()| {
+        ha_wolf_manager::logging::initialize()?;
+        if cli.command.is_none() {
+            tracing::info!(
+                version = env!("CARGO_PKG_VERSION"),
+                "Manager process admitted"
+            );
+        }
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
@@ -13,6 +20,7 @@ fn main() {
         runtime.block_on(run(cli))
     });
     if let Err(error) = result {
+        tracing::error!(code = ?error.code(), "Manager process stopped with a controlled error");
         eprintln!("{error}");
         std::process::exit(1);
     }
@@ -62,6 +70,46 @@ async fn run(cli: Cli) -> Result<(), wolf_core::SafeError> {
             .await
             .map_err(|_| wolf_core::SafeError::new("internal_error"))?
         }
-        None => serve(cli).await,
+        Some(Command::ImportPreview {
+            source,
+            format_version,
+        }) => {
+            let bytes = read_secret(source, 4 * 1024 * 1024)?;
+            let settings = ha_wolf_manager::imports::preview(*format_version, &bytes)?;
+            println!(
+                "{}",
+                serde_json::json!({"format_version":format_version,"settings":settings})
+            );
+            Ok(())
+        }
+        Some(Command::ImportLegacy {
+            source,
+            format_version,
+            pc,
+            expected_revision,
+        }) => {
+            let source = source.clone();
+            let version = *format_version;
+            let pc = wolf_core::PcId::new(pc.clone())?;
+            let revision = wolf_core::Revision::new(expected_revision.clone())?;
+            let data = cli.data.clone();
+            let revision = tokio::task::spawn_blocking(move || {
+                std::fs::symlink_metadata(data.join("manager.sqlite3"))
+                    .map_err(|_| wolf_core::SafeError::validation())?;
+                let bytes = read_secret(&source, 4 * 1024 * 1024)?;
+                let mut store = ha_wolf_manager::store::Store::open(&data, now())?;
+                store.import_legacy_settings(&pc, &revision, version, &bytes, now())
+            })
+            .await
+            .map_err(|_| wolf_core::SafeError::new("internal_error"))??;
+            println!("{}", serde_json::json!({"desired_revision":revision}));
+            Ok(())
+        }
+        None => {
+            tracing::info!("Manager runtime starting");
+            let result = serve(cli).await;
+            tracing::info!("Manager runtime stopped; uncertain operations retained");
+            result
+        }
     }
 }

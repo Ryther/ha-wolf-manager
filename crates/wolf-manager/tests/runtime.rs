@@ -1,6 +1,70 @@
 use ha_wolf_manager::{api::now, health::healthcheck, store::Store};
 use tempfile::tempdir;
 #[test]
+fn special_secret_and_certificate_inputs_refuse_without_waiting_for_a_writer() {
+    use ha_wolf_manager::runtime::{client_tls, read_secret};
+    use std::{fs::OpenOptions, os::unix::fs::OpenOptionsExt, sync::mpsc, time::Duration};
+    let t = tempdir().unwrap();
+    let fifo = t.path().join("input.fifo");
+    assert!(
+        std::process::Command::new("mkfifo")
+            .args(["-m", "600"])
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success()
+    );
+    for certificate in [false, true] {
+        let path = fifo.clone();
+        let (tx, rx) = mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            let result = if certificate {
+                client_tls(Some(&path)).map(|_| ())
+            } else {
+                read_secret(&path, 64).map(|_| ())
+            };
+            tx.send(result).unwrap();
+        });
+        let immediate = rx.recv_timeout(Duration::from_millis(500));
+        // Release an incorrectly blocking reader before failing the regression.
+        let release = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32)
+            .open(&fifo)
+            .unwrap();
+        thread.join().unwrap();
+        drop(release);
+        assert!(
+            immediate
+                .expect("special input blocked waiting for a writer")
+                .is_err()
+        );
+    }
+}
+#[test]
+fn tls_trust_inputs_refuse_aliases_links_and_writable_files() {
+    use ha_wolf_manager::runtime::client_tls;
+    use std::{fs, os::unix::fs::PermissionsExt};
+    let t = tempdir().unwrap();
+    let cert = t.path().join("ca.pem");
+    fs::write(&cert, include_bytes!("fixtures/tls-cert.pem")).unwrap();
+    fs::set_permissions(&cert, fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(client_tls(Some(&cert)).is_ok());
+    let alias = t.path().join("alias.pem");
+    std::os::unix::fs::symlink(&cert, &alias).unwrap();
+    assert!(client_tls(Some(&alias)).is_err());
+    let link = t.path().join("hardlink.pem");
+    fs::hard_link(&cert, &link).unwrap();
+    assert!(client_tls(Some(&cert)).is_err());
+    fs::remove_file(&link).unwrap();
+    fs::set_permissions(&cert, fs::Permissions::from_mode(0o666)).unwrap();
+    assert!(client_tls(Some(&cert)).is_err());
+    fs::set_permissions(&cert, fs::Permissions::from_mode(0o644)).unwrap();
+    fs::write(&cert, vec![b'A'; 1024 * 1024 + 1]).unwrap();
+    assert!(client_tls(Some(&cert)).is_err());
+}
+#[test]
 fn private_exec_healthcheck_requires_live_identity_and_fresh_marker() {
     let t = tempdir().unwrap();
     let root = t.path().join("data");

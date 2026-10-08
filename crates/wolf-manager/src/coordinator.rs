@@ -6,6 +6,7 @@ use crate::{
     ssh::{self, Endpoint, Probe},
 };
 use rusqlite::params;
+use std::time::Instant;
 use uuid::Uuid;
 use wolf_core::*;
 #[derive(Clone)]
@@ -152,17 +153,21 @@ impl AppState {
                 s.enqueue_operation(&plan_pc, kind, revision.as_ref(), &requests, now())
             })
             .await?;
+        tracing::info!(code="operation_admitted",kind=?kind,"Durable operation admitted");
         let state = self.clone();
         tokio::spawn(async move {
             let _permit = permit;
-            if state.run_operation(id).await.is_err() {
+            if let Err(error) = state.run_operation(id).await {
                 let _ = state.blocking(move |s| s.mark_interrupted(id, now())).await;
+                tracing::warn!(code=%error.code(),kind=?kind,"Operation execution ended without normal completion");
             }
         });
         Ok(id)
     }
     pub async fn run_operation(&self, id: Uuid) -> Result<(), SafeError> {
+        let started = Instant::now();
         let children = self.blocking(move |s| s.operation_children(id)).await?;
+        let child_count = children.len();
         let pc = children
             .first()
             .ok_or_else(SafeError::validation)?
@@ -179,6 +184,12 @@ impl AppState {
                     Ok(())
                 })
                 .await?;
+                tracing::info!(
+                    code = "operation_not_dispatched",
+                    count = child_count,
+                    duration_ms = started.elapsed().as_millis() as u64,
+                    "Connection failure reconciled before dispatch"
+                );
                 return Ok(());
             }
         };
@@ -192,6 +203,12 @@ impl AppState {
                 Err(_) => {
                     self.blocking(move |s| s.mark_interrupted(id, now()))
                         .await?;
+                    tracing::warn!(
+                        code = "unknown_interrupted",
+                        count = child_count,
+                        duration_ms = started.elapsed().as_millis() as u64,
+                        "Dispatched RPC completion unavailable"
+                    );
                     return Err(SafeError::new("unknown_interrupted"));
                 }
             };
@@ -202,6 +219,12 @@ impl AppState {
             {
                 self.blocking(move |s| s.mark_interrupted(id, now()))
                     .await?;
+                tracing::warn!(
+                    code = "unknown_interrupted",
+                    count = child_count,
+                    duration_ms = started.elapsed().as_millis() as u64,
+                    "Host reported an uncertain dispatched outcome"
+                );
                 return Err(SafeError::new("unknown_interrupted"));
             }
             if let Some(result) = &response.result {
@@ -214,11 +237,22 @@ impl AppState {
                 break;
             }
         }
-        self.blocking(move |s| {
-            s.finish_recorded_operation(id, now())?;
-            Ok(())
-        })
-        .await
+        let resolution = self
+            .blocking(move |s| s.finish_recorded_operation(id, now()))
+            .await?;
+        let code = match resolution.state {
+            OperationState::Succeeded => "operation_succeeded",
+            OperationState::Failed => "operation_failed",
+            OperationState::Rejected => "operation_rejected",
+            _ => "unknown_interrupted",
+        };
+        tracing::info!(
+            code,
+            count = child_count,
+            duration_ms = started.elapsed().as_millis() as u64,
+            "Durable operation completion recorded"
+        );
+        Ok(())
     }
     pub async fn read_rpc(
         &self,
@@ -268,6 +302,7 @@ impl AppState {
         Ok(result)
     }
     pub async fn reconcile(&self, id: Uuid) -> Result<Reconciliation, SafeError> {
+        let started = Instant::now();
         let children = self
             .blocking(move |s| {
                 let state = s.operation_state(id)?;
@@ -277,6 +312,7 @@ impl AppState {
                 s.operation_children(id)
             })
             .await?;
+        let child_count = children.len();
         let mut observations = Vec::new();
         for child in children {
             if child.dispatch_phase == DispatchPhase::NotDispatched {
@@ -303,8 +339,22 @@ impl AppState {
                 _ => return Err(SafeError::validation()),
             }
         }
-        self.blocking(move |s| s.reconcile_operation(id, &observations, now()))
-            .await
+        let resolution = self
+            .blocking(move |s| s.reconcile_operation(id, &observations, now()))
+            .await?;
+        let code = match resolution.state {
+            OperationState::Succeeded => "reconciled_succeeded",
+            OperationState::Failed => "reconciled_failed",
+            OperationState::Rejected => "reconciled_rejected",
+            _ => "unknown_interrupted",
+        };
+        tracing::info!(
+            code,
+            count = child_count,
+            duration_ms = started.elapsed().as_millis() as u64,
+            "Durable reconciliation recorded without replay"
+        );
+        Ok(resolution)
     }
 }
 fn same_endpoint(a: &Endpoint, b: &Endpoint) -> bool {

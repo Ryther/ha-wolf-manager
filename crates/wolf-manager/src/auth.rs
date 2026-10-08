@@ -70,7 +70,7 @@ impl BootstrapSecret {
         let fd = rustix::fs::openat2(
             rustix::fs::CWD,
             path,
-            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC | rustix::fs::OFlags::NONBLOCK,
             rustix::fs::Mode::empty(),
             rustix::fs::ResolveFlags::NO_SYMLINKS | rustix::fs::ResolveFlags::NO_MAGICLINKS,
         )
@@ -674,4 +674,39 @@ pub fn normalize_ingress_prefix(value: &str) -> Result<String, SafeError> {
     } else {
         format!("{value}/")
     })
+}
+
+#[cfg(test)]
+mod secret_file_tests {
+    use super::*;
+    #[test]
+    fn bootstrap_secret_fifo_refuses_without_waiting_for_a_writer() {
+        use std::{fs::OpenOptions, os::unix::fs::OpenOptionsExt, sync::mpsc, time::Duration};
+        let fixture = tempfile::tempdir().unwrap();
+        let fifo = fixture.path().join("bootstrap-token");
+        assert!(
+            std::process::Command::new("mkfifo")
+                .args(["-m", "600"])
+                .arg(&fifo)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let path = fifo.clone();
+        let (tx, rx) = mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            tx.send(BootstrapSecret::read(&path).is_err()).unwrap();
+        });
+        let immediate = rx.recv_timeout(Duration::from_millis(500));
+        // Release an incorrectly blocking open before joining or failing the test.
+        let release = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32)
+            .open(&fifo)
+            .unwrap();
+        thread.join().unwrap();
+        drop(release);
+        assert!(immediate.expect("bootstrap secret FIFO blocked waiting for a writer"));
+    }
 }

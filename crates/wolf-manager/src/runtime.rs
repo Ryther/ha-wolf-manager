@@ -84,6 +84,22 @@ pub enum Command {
         #[arg(long)]
         password_file: PathBuf,
     },
+    ImportPreview {
+        #[arg(long)]
+        source: PathBuf,
+        #[arg(long)]
+        format_version: u8,
+    },
+    ImportLegacy {
+        #[arg(long)]
+        source: PathBuf,
+        #[arg(long)]
+        format_version: u8,
+        #[arg(long)]
+        pc: String,
+        #[arg(long)]
+        expected_revision: String,
+    },
 }
 impl Cli {
     pub fn validate(&self) -> Result<(), SafeError> {
@@ -148,7 +164,33 @@ impl Cli {
     }
 }
 fn certificates(path: &Path) -> Result<Vec<rustls::pki_types::CertificateDer<'static>>, SafeError> {
-    let bytes = std::fs::read(path).map_err(internal)?;
+    use rustix::fs::{Mode, OFlags, ResolveFlags};
+    use std::{fs::File, io::Read, os::unix::fs::MetadataExt};
+    let file = File::from(
+        rustix::fs::openat2(
+            rustix::fs::CWD,
+            path,
+            OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NONBLOCK,
+            Mode::empty(),
+            ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_MAGICLINKS,
+        )
+        .map_err(internal)?,
+    );
+    let metadata = file.metadata().map_err(internal)?;
+    if !metadata.is_file()
+        || metadata.nlink() != 1
+        || ![0, rustix::process::geteuid().as_raw()].contains(&metadata.uid())
+        || metadata.mode() & 0o022 != 0
+    {
+        return Err(SafeError::new("forbidden"));
+    }
+    if metadata.len() > 1024 * 1024 {
+        return Err(SafeError::new("payload_too_large"));
+    }
+    let mut bytes = Vec::new();
+    file.take(1024 * 1024 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(internal)?;
     if bytes.len() > 1024 * 1024 {
         return Err(SafeError::new("payload_too_large"));
     }
@@ -196,11 +238,11 @@ pub fn server_tls(cert: &Path, key: &Path) -> Result<rustls::ServerConfig, SafeE
 pub fn read_secret(path: &Path, limit: u64) -> Result<Vec<u8>, SafeError> {
     use rustix::fs::{Mode, OFlags, ResolveFlags};
     use std::{fs::File, io::Read, os::unix::fs::MetadataExt};
-    let mut file = File::from(
+    let file = File::from(
         rustix::fs::openat2(
             rustix::fs::CWD,
             path,
-            OFlags::RDONLY | OFlags::CLOEXEC,
+            OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NONBLOCK,
             Mode::empty(),
             ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_MAGICLINKS,
         )
@@ -216,7 +258,9 @@ pub fn read_secret(path: &Path, limit: u64) -> Result<Vec<u8>, SafeError> {
         return Err(SafeError::new("forbidden"));
     }
     let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes).map_err(internal)?;
+    file.take(limit.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(internal)?;
     if bytes.len() as u64 > limit {
         return Err(SafeError::new("payload_too_large"));
     }
@@ -348,14 +392,18 @@ pub async fn serve_connection(
         if let Ok(Ok(tls)) =
             tokio::time::timeout(Duration::from_secs(10), acceptor.accept(stream)).await
         {
-            let _ = builder
-                .serve_connection(hyper_util::rt::TokioIo::new(tls), service)
-                .await;
+            let _ = tokio::time::timeout(
+                Duration::from_secs(60),
+                builder.serve_connection(hyper_util::rt::TokioIo::new(tls), service),
+            )
+            .await;
         }
     } else {
-        let _ = builder
-            .serve_connection(hyper_util::rt::TokioIo::new(stream), service)
-            .await;
+        let _ = tokio::time::timeout(
+            Duration::from_secs(60),
+            builder.serve_connection(hyper_util::rt::TokioIo::new(stream), service),
+        )
+        .await;
     }
 }
 async fn shutdown_signal() {
