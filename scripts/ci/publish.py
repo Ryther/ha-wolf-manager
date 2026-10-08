@@ -115,6 +115,12 @@ def publish(authority, prepared, output):
             info = authority.write('POST', prefix + '/assets?name=' + urllib.parse.quote(name, safe=''), raw=data)
         v.require(info.get('name') == name and info.get('size') == len(data)
                   and info.get('digest') == 'sha256:' + v.sha256(data), 'publisher_remote_asset_identity')
+    # Public release consumers must be able to pull the exact verified image.
+    try:
+        public_registry = r.Registry.anonymous()
+        r.verify_public(files, receipt['image'], public_registry.request)
+    except v.VerificationError:
+        raise v.VerificationError('publisher_image_not_public') from None
     # Re-check tag just before making the existing draft public; no ref changes.
     v.require(tag_commit(authority, expected.version) == expected.candidate_sha, 'publisher_final_tag')
     authority.write('PATCH', prefix, {'draft': False, 'prerelease': False})
@@ -141,5 +147,9 @@ def main():
 
 if __name__ == '__main__':
     try: main()
+    except v.VerificationError as error:
+        if str(error) == 'publisher_image_not_public':
+            raise SystemExit('Verified image is not anonymously readable. Configure GHCR package visibility as Public, then retry the same candidate; the release remains a draft.')
+        raise SystemExit('Trusted publisher refused; credentials and raw API errors are not logged.')
     except Exception:
         raise SystemExit('Trusted publisher refused; credentials and raw API errors are not logged.')

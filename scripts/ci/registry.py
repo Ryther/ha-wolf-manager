@@ -46,6 +46,25 @@ class Registry:
         except OSError:
             raise v.VerificationError('registry_authentication_failed') from None
 
+    @classmethod
+    def anonymous(cls):
+        """Obtain only public pull access; never supply a publication credential."""
+        registry = cls.__new__(cls)
+        registry.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), v._NoRedirect)
+        url = 'https://ghcr.io/token?' + urllib.parse.urlencode({
+            'service': 'ghcr.io', 'scope': 'repository:ryther/ha-wolf-manager:pull'})
+        try:
+            with registry.opener.open(urllib.request.Request(url), timeout=30) as response:
+                v.require(response.status == 200, 'registry_public_token_status')
+                raw = response.read(1024 * 1024 + 1)
+                v.require(len(raw) <= 1024 * 1024, 'registry_public_token_size')
+                result = v.json_bytes(raw)
+            registry.token = result.get('token')
+            v.require(isinstance(registry.token, str) and bool(registry.token), 'registry_public_token')
+        except OSError:
+            raise v.VerificationError('registry_public_access_unavailable') from None
+        return registry
+
     def request(self, method, path, data=None, media=None):
         v.require(path.startswith(PREFIX) and not any(x in path for x in ('\r', '\n', '\\', '..')),
                   'registry_path')
@@ -120,4 +139,34 @@ def publish(files, image, request):
             transfer_blob(files, layer, request, done)
         transfer_manifest(files, descriptor, descriptor['digest'], request)
     transfer_manifest(files, root, image['tag'], request)
+    return root['digest']
+
+
+def verify_public_manifest(files, descriptor, reference, request):
+    digest = descriptor['digest']
+    expected = files[OCI_BLOB_PREFIX + v.parse_digest(digest)]
+    status, headers, data = request('GET', PREFIX + MANIFEST_PATH + reference)
+    v.require(status == 200 and data == expected
+              and header(headers, 'Docker-Content-Digest') == digest, 'registry_public_manifest_identity')
+
+
+def verify_public(files, image, request):
+    """Read the exact tag, index, platforms and blob identities with public access."""
+    v.verify_oci(files, image)
+    v.require(image['repository'] == 'ghcr.io/ryther/ha-wolf-manager'
+              and v.SEMVER.fullmatch(image['tag']), 'registry_public_subject')
+    root = v.json_bytes(files['oci/index.json'])['manifests'][0]
+    verify_public_manifest(files, root, image['tag'], request)
+    verify_public_manifest(files, root, root['digest'], request)
+    index = v.json_bytes(files[OCI_BLOB_PREFIX + v.parse_digest(root['digest'])])
+    blobs = {}
+    for descriptor in index['manifests']:
+        verify_public_manifest(files, descriptor, descriptor['digest'], request)
+        manifest = v.json_bytes(files[OCI_BLOB_PREFIX + v.parse_digest(descriptor['digest'])])
+        for blob in [manifest['config'], *manifest['layers']]:
+            blobs[blob['digest']] = blob
+    for digest, descriptor in blobs.items():
+        status, headers, _ = request('HEAD', PREFIX + 'blobs/' + digest)
+        v.require(status == 200 and header(headers, 'Docker-Content-Digest') == digest
+                  and header(headers, 'Content-Length') == str(descriptor['size']), 'registry_public_blob_identity')
     return root['digest']

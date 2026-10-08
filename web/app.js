@@ -157,17 +157,16 @@
     status=statusResult.status==='fulfilled'?statusResult.value:null;
     settings=settingsResult.status==='fulfilled'?settingsResult.value:null;desired=settings?.desired_revision||null;
     parameters=paramsResult.status==='fulfilled'?paramsResult.value.parameters:{};
+    content.append(servicePanel(pc,root),catalogPanel(gamesResult,root),configurationPanel(),operationsPanel(opsResult),logsPanel(root));
+    main.setAttribute('aria-busy','false');
+  }
+  function servicePanel(pc,root){
     const service=node('section',null,{class:'panel service-panel'});
     append(service,append(node('div',null,{class:'row spread'}),node('h2',pc.display_name),append(node('div',null,{class:'row'}),button('Edit PC',()=>pcDialog(pc)),button('SSH setup',()=>sshDialog(pc)),button('Refresh',async()=>{await issueCsrf();await loadPc();}))));
     const observed=status?.status;
     const availability=status?.availability||'unknown';
     const lastKnown=availability!=='online';
-    const observation=node('div',null,{class:'service-observation'});
-    append(observation,node('p',(lastKnown?'Last known service: ':'Service: ')+(observed?.container_state||'unknown'),{class:'service-state '+(lastKnown?'is-stale':observed?.container_state==='running'?'is-running':'')}),node('p','Host availability: '+availability,{class:'availability'}));
-    service.append(observation);
-    const observedTime=status?.observed_at;
-    const date=Number.isFinite(observedTime)?new Date(observedTime):null;
-    service.append(node('p','Observed at: '+(date&&!Number.isNaN(date.getTime())?date.toISOString():'unknown'),{class:'muted'}));
+    appendServiceObservation(service,observed,availability,lastKnown);
     if(lastKnown)service.append(node('p','Service state and observed revisions are last known; current host state is unavailable.',{class:'warning'}));
     if(!status)service.append(node('p','No current host observation. Controls require a verified host.',{class:'warning'}));
     if(observed?.recovery_pending)service.append(node('p','Recovery pending. Preserve current files and backups; inspect diagnostics before retrying.',{class:'warning'}));
@@ -179,7 +178,20 @@
       button('Start',()=>queue(root+'service/start',{expected_desired_revision:desired}),{disabled:unavailable,class:'primary'}),
       button('Stop',()=>queue(root+'service/stop',{}),{disabled:!status,class:'stop-service'}),
       button('Restart',()=>queue(root+'service/restart',{expected_desired_revision:desired}),{disabled:unavailable})));
-    content.append(service);
+    return service;
+  }
+  function appendServiceObservation(service,observed,availability,lastKnown){
+    const observation=node('div',null,{class:'service-observation'});
+    let stateClass='';
+    if(lastKnown)stateClass='is-stale';
+    else if(observed?.container_state==='running')stateClass='is-running';
+    append(observation,node('p',(lastKnown?'Last known service: ':'Service: ')+(observed?.container_state||'unknown'),{class:'service-state '+stateClass}),node('p','Host availability: '+availability,{class:'availability'}));
+    service.append(observation);
+    const observedTime=status?.observed_at;
+    const date=Number.isFinite(observedTime)?new Date(observedTime):null;
+    service.append(node('p','Observed at: '+(date&&!Number.isNaN(date.getTime())?date.toISOString():'unknown'),{class:'muted'}));
+  }
+  function catalogPanel(gamesResult,root){
     const gamesPanel=node('section',null,{class:'panel'});gamesPanel.append(node('h2','Steam games'));
     if(gamesResult.status==='fulfilled'){
       const catalog=gamesResult.value;
@@ -189,8 +201,7 @@
       for(const game of catalog.games)if(game.pc_id===selected)grid.append(gameCard(game,root));
       gamesPanel.append(grid);if(!catalog.games.length)gamesPanel.append(node('p','No games in the last complete catalog.'));
     }else gamesPanel.append(node('p','Catalog unavailable. No empty catalog is inferred.',{class:'warning'}));
-    content.append(gamesPanel,configurationPanel(),operationsPanel(opsResult),logsPanel(root));
-    main.setAttribute('aria-busy','false');
+    return gamesPanel;
   }
   async function queue(path,body){
     const result=await api(path,{method:'POST',body});
@@ -200,7 +211,7 @@
   function gameCard(game,root){
     const card=node('article',null,{class:'game'}),content=node('div',null,{class:'content'});
     const heading=node('div',null,{class:'game-heading'});
-    if(/^[0-9]{1,12}$/.test(game.app_id))heading.append(node('img',null,{src:'https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/'+game.app_id+'/header.jpg',alt:'',loading:'lazy',referrerpolicy:'no-referrer'}));
+    if(/^\d{1,12}$/.test(game.app_id))heading.append(node('img',null,{src:'https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/'+game.app_id+'/header.jpg',alt:'',loading:'lazy',referrerpolicy:'no-referrer'}));
     append(heading,append(node('div'),node('h3',game.name),node('small','Steam '+game.app_id+' / '+game.library_id)));content.append(heading);
     const value=settings?.settings?.games?.[game.app_id]||{direct_launch:false,proton_cachyos:false,parameters:[]};
     const direct=check('Direct launch',value.direct_launch),proton=check('Proton-CachyOS',value.proton_cachyos,!status?.capabilities?.proton_cachyos);
@@ -222,7 +233,7 @@
   }
   function pcDialog(pc=null){
     const {dialog,close}=modal(pc?'Edit PC':'Add PC');const form=node('form',null,{class:'stack'});
-    const id=field('PC ID','text',pc?.pc_id||'',{required:'',pattern:'[a-z0-9][a-z0-9_\\-]{0,63}',disabled:!!pc});
+    const id=field('PC ID','text',pc?.pc_id||'',{required:'',pattern:String.raw`[a-z0-9][a-z0-9_\-]{0,63}`,disabled:!!pc});
     const name=field('Display name','text',pc?.display_name||'',{required:'',maxlength:'256'});
     const host=field('SSH host','text',pc?.ssh_host||'',{required:''});
     const port=field('SSH port','number',pc?.ssh_port||22,{required:'',min:'1',max:'65535'});
@@ -259,7 +270,7 @@
   }
   function parameterDialog(id=null,definition={}){
     const {dialog,close}=modal(id?'Edit parameter':'Add parameter');const form=node('form',null,{class:'stack'});
-    const key=field('Parameter ID','text',id||'',{required:'',disabled:!!id,pattern:'[A-Za-z0-9_.\\-]{1,64}'}),label=field('Label','text',definition.label||'',{required:'',maxlength:'256'});
+    const key=field('Parameter ID','text',id||'',{required:'',disabled:!!id,pattern:String.raw`[A-Za-z0-9_.\-]{1,64}`}),label=field('Label','text',definition.label||'',{required:'',maxlength:'256'});
     const options=field('Launch options','textarea',definition.launch_options||'',{required:'',maxlength:'4096'}),description=field('Description','textarea',definition.description||'',{maxlength:'4096'});
     const save=node('button','Save parameter',{type:'submit',class:'primary'});append(form,key.label,label.label,options.label,description.label,append(node('div',null,{class:'row'}),save,close));dialog.append(form);
     form.addEventListener('submit',async e=>{e.preventDefault();save.disabled=true;try{await api('parameters/'+encodeURIComponent(key.input.value),{method:'PUT',body:{label:label.input.value,launch_options:options.input.value,description:description.input.value}});dialog.close();await loadPc();notice('Reusable parameter saved. Affected desired revisions changed.');}catch(e){notice(e.message,true);}finally{save.disabled=false;}});
@@ -272,10 +283,11 @@
       if(op.submitted_at)entry.append(node('small',new Date(op.submitted_at).toLocaleString()));
       if(op.sanitized_result)entry.append(node('pre',JSON.stringify(op.sanitized_result,null,2)));
       const resolution=node('div');entry.append(resolution);
-      if(op.state==='unknown_interrupted')entry.append(button('Reconcile operation',async()=>{
+      if(op.state==='unknown_interrupted'){entry.append(button('Reconcile operation',async()=>{
         const value=await api('operations/'+encodeURIComponent(op.operation_id)+'/reconcile',{method:'POST',body:{}});
         resolution.replaceChildren(node('p','Resolution: '+value.state),node('pre',JSON.stringify(value.resolution,null,2)));
-      }));list.append(entry);
+      }));}
+      list.append(entry);
     }
     if(data.next_cursor)list.append(button('Next operations',async()=>render(await api('pcs/'+encodeURIComponent(selected)+'/operations?limit=20&cursor='+encodeURIComponent(data.next_cursor)))));
     if(!data.operations.length)list.append(node('p','No operations yet.'));};

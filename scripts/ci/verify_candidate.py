@@ -318,6 +318,13 @@ def inspect_tar_file(archive, entry, name, binary_machine):
     return executable, template
 
 
+def validate_tar_target(entry, name, binary_machine):
+    if binary_machine:
+        require((name == 'bin' and entry.isdir()) or (name == 'bin/wolf-manager-host' and entry.isfile()), 'unsupported_host_entry')
+    else:
+        require(name in ('installer', 'installer/templates', 'install.sh') or name.startswith('installer/templates/') or name == 'installer/metadata.json', 'unsupported_installer_entry')
+
+
 def inspect_tar(data, binary_machine=None):
     names = set()
     total = 0
@@ -330,10 +337,7 @@ def inspect_tar(data, binary_machine=None):
                 require(name not in names and len(names) < 10000, 'duplicate_archive_entry')
                 names.add(name)
                 require(entry.isfile() or entry.isdir(), 'tar_special_entry')
-                if binary_machine:
-                    require((name == 'bin' and entry.isdir()) or (name == 'bin/wolf-manager-host' and entry.isfile()), 'unsupported_host_entry')
-                else:
-                    require(name in ('installer', 'installer/templates', 'install.sh') or name.startswith('installer/templates/') or name == 'installer/metadata.json', 'unsupported_installer_entry')
+                validate_tar_target(entry, name, binary_machine)
                 require(entry.size <= MAX_FILE and entry.size >= 0 and not entry.mode & 0o6000, 'archive_size_or_mode')
                 total += entry.size
                 require(total <= MAX_BUNDLE, 'archive_size')
@@ -423,6 +427,12 @@ def authenticate_bundle(artifact_id, path, authority, expected, selected, run):
     return sha256(raw), files, info
 
 
+def merge_bundle_members(merged, files):
+    for member, content in files.items():
+        require(member not in merged, 'duplicate_bundle_member')
+        merged[member] = content
+
+
 def verify_release_assets(receipt, artifacts, authority, expected, selected, run):
     selected_id = selected['id']
     expected_names = {'wolf-manager-host-v'+expected.version+'-'+triple+ARCHIVE_SUFFIX for triple in TRIPLES}
@@ -450,9 +460,7 @@ def verify_release_assets(receipt, artifacts, authority, expected, selected, run
             digest, files, info = authenticate_bundle(artifact_id, artifacts[artifact_id], authority, expected, selected, run)
             bundles[artifact_id] = (digest, files)
             metadata[artifact_id] = info
-            for member, content in files.items():
-                require(member not in merged, 'duplicate_bundle_member')
-                merged[member] = content
+            merge_bundle_members(merged, files)
         artifact_sha, files = bundles[artifact_id]
         require(artifact_sha == asset['workflow_artifact_sha256'], 'artifact_receipt_digest')
         data = files.get(name)

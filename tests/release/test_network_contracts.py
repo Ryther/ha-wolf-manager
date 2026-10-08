@@ -13,6 +13,7 @@ import urllib.error
 from scripts.ci import artifacts as a, fetch_tool as f, registry as r, verify_candidate as v
 from scripts.ci import producer as p, publish as publisher
 import test_publisher
+import test_candidate
 
 
 def response(data=b'', status=200):
@@ -138,7 +139,7 @@ class NetworkContracts(unittest.TestCase):
         fixture.authority.get_json = get
         fixture.authority.write = write
         with patch.dict(os.environ, {'GITHUB_ACTOR': 'fixture'}), patch.object(publisher.r, 'Registry'), patch.object(
-            publisher.r, 'publish', return_value=fixture.fixture.receipt['image']['index_digest']):
+            publisher.r, 'publish', return_value=fixture.fixture.receipt['image']['index_digest']), patch.object(publisher.r, 'verify_public'):
             publication = publisher.publish(fixture.authority, prepared, fixture.output)
             self.assertEqual(publication['candidate_sha'], prepared[0].candidate_sha)
             self.assertEqual(writes[-1][0], 'PATCH')
@@ -160,6 +161,58 @@ class NetworkContracts(unittest.TestCase):
             with self.assertRaisesRegex(v.VerificationError, 'publisher_final_tag'):
                 publisher.publish(fixture.authority, prepared, fixture.output)
             self.assertEqual(writes, [])
+
+    def test_anonymous_pull_has_no_account_credentials_and_verifies_every_graph_member(self):
+        opener = MagicMock(); opener.open.return_value = response(b'{"token":"public-only"}')
+        with patch.object(r.urllib.request, 'build_opener', return_value=opener) as build:
+            public = r.Registry.anonymous()
+        token_request = opener.open.call_args.args[0]
+        self.assertIsNone(token_request.get_header('Authorization'))
+        self.assertEqual(urllib.parse.parse_qs(urllib.parse.urlsplit(token_request.full_url).query)['scope'],
+                         ['repository:ryther/ha-wolf-manager:pull'])
+        self.assertEqual(build.call_args.args[0].proxies, {})
+        opener.open.return_value = response(b'index')
+        public.request('GET', r.PREFIX + 'manifests/0.1.0')
+        self.assertEqual(opener.open.call_args.args[0].get_header('Authorization'), 'Bearer public-only')
+        files, _, _, _, receipt = test_candidate.fixture()
+        image = receipt['image']; calls = []
+        root = v.json_bytes(files['oci/index.json'])['manifests'][0]
+        index = v.json_bytes(files[r.OCI_BLOB_PREFIX + v.parse_digest(root['digest'])])
+        descriptors = {item['digest']: item for item in [root, *index['manifests']]}
+        def request(method, path):
+            calls.append((method, path))
+            reference = path.rsplit('/', 1)[1]
+            digest = root['digest'] if reference == image['tag'] else reference
+            data = files[r.OCI_BLOB_PREFIX + v.parse_digest(digest)]
+            return 200, {'Docker-Content-Digest': digest, 'Content-Length': str(len(data))}, data if method == 'GET' else b''
+        self.assertEqual(r.verify_public(files, image, request), image['index_digest'])
+        self.assertEqual(len([method for method, _ in calls if method == 'GET']), len(descriptors) + 1)
+        self.assertTrue(any(method == 'HEAD' for method, _ in calls))
+        def unavailable(method, path): return 404, {}, b''
+        with self.assertRaisesRegex(v.VerificationError, 'registry_public_manifest_identity'):
+            r.verify_public(files, image, unavailable)
+        def altered_blob(method, path):
+            if method == 'HEAD': return 200, {'Docker-Content-Digest': 'sha256:' + '0' * 64, 'Content-Length': '1'}, b''
+            return request(method, path)
+        with self.assertRaisesRegex(v.VerificationError, 'registry_public_blob_identity'):
+            r.verify_public(files, image, altered_blob)
+
+    def test_private_image_prevents_public_release_transition(self):
+        fixture = test_publisher.PublisherTests(); fixture.setUp(); self.addCleanup(fixture.doCleanups)
+        prepared = fixture.prepare(); original_get = fixture.authority.get_json
+        fixture.authority.get_json = lambda path: [] if path.endswith('/assets?per_page=100') else original_get(path)
+        writes = []
+        def write(method, path, value=None, raw=None):
+            writes.append(method)
+            name = urllib.parse.parse_qs(urllib.parse.urlsplit(path).query)['name'][0]
+            return {'name': name, 'size': len(raw), 'digest': 'sha256:' + v.sha256(raw)}
+        fixture.authority.write = write
+        with patch.dict(os.environ, {'GITHUB_ACTOR': 'fixture'}), patch.object(publisher.r, 'Registry'), patch.object(
+            publisher.r, 'publish', return_value=fixture.fixture.receipt['image']['index_digest']), patch.object(
+            publisher.r, 'verify_public', side_effect=v.VerificationError('registry_public_manifest_identity')):
+            with self.assertRaisesRegex(v.VerificationError, 'publisher_image_not_public'):
+                publisher.publish(fixture.authority, prepared, fixture.output)
+        self.assertNotIn('PATCH', writes)
 
     def test_corrupt_lzma_zip_is_a_safe_refusal(self):
         data = io.BytesIO()

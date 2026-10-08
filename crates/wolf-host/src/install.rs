@@ -406,6 +406,21 @@ fn recipes(request: &InstallRequest) -> io::Result<Vec<Recipe>> {
     Ok(recipes)
 }
 
+fn installation_recipes(
+    request: &InstallRequest,
+    environment: &Environment,
+) -> io::Result<Vec<Recipe>> {
+    let mut recipes = recipes(request)?;
+    for recipe in &mut recipes {
+        if !request.initial_files.iter().any(|f| f.path == recipe.path)
+            && request.policy.broker_secret_file.as_ref() != Some(&recipe.path)
+        {
+            recipe.path = environment.path(&recipe.path);
+        }
+    }
+    Ok(recipes)
+}
+
 fn append_broker_recipe(request: &InstallRequest, recipes: &mut Vec<Recipe>) -> io::Result<()> {
     if let Some(source) = &request.broker_config_source {
         let target = request
@@ -690,14 +705,7 @@ fn preflight_with(request: &InstallRequest, environment: &Environment) -> io::Re
         .map(read)
         .transpose()?
         .map(|(_, i)| i);
-    let mut recipes = recipes(request)?;
-    for recipe in &mut recipes {
-        if !request.initial_files.iter().any(|f| f.path == recipe.path)
-            && request.policy.broker_secret_file.as_ref() != Some(&recipe.path)
-        {
-            recipe.path = environment.path(&recipe.path);
-        }
-    }
+    let recipes = installation_recipes(request, environment)?;
     let receipt_path = request.policy.state_root.join("installation.json");
     let previous: Option<InstallReport> = if receipt_path.exists() {
         trusted_path(&receipt_path, 0, false)?;
@@ -1141,14 +1149,7 @@ fn apply_with(plan: &InstallPlan, environment: &Environment) -> io::Result<Insta
         .join("installer")
         .join(plan.id.to_string());
     directory(&folder, 0o700)?;
-    let mut recipes = recipes(&request)?;
-    for recipe in &mut recipes {
-        if !request.initial_files.iter().any(|f| f.path == recipe.path)
-            && request.policy.broker_secret_file.as_ref() != Some(&recipe.path)
-        {
-            recipe.path = environment.path(&recipe.path);
-        }
-    }
+    let recipes = installation_recipes(&request, environment)?;
     validate_recipe_consistency(plan, &recipes)?;
     environment.validate_configs(&folder, &recipes)?;
 

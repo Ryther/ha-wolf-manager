@@ -65,7 +65,7 @@ Review actual logs and retained reports. Do not replace a failed required check 
 
 **Publish verified candidate** can run after a successful main candidate, or be dispatched manually with its existing `run_id`. Select `main` as the publisher workflow branch. Its read-only verification job checks eligibility; the protected `release` job repeats verification before transferring bytes.
 
-The publisher executes its own trusted workflow revision, never candidate archive content. It resolves the coordinated version, draft and tag independently; a fork/PR producer, wrong tag commit, missing/failed check, ambiguous artifact or altered ZIP is rejected. It uploads the original verified blobs/manifests to `ghcr.io/ryther/ha-wolf-manager` and original versioned archives/evidence to the existing GitHub draft. It performs no compilation or image rebuild. Only after remote identities match does it make that draft public.
+The publisher executes its own trusted workflow revision, never candidate archive content. It resolves the coordinated version, draft and tag independently; a fork/PR producer, wrong tag commit, missing/failed check, ambiguous artifact or altered ZIP is rejected. It uploads the original verified blobs/manifests to `ghcr.io/ryther/ha-wolf-manager` and original versioned archives/evidence to the existing GitHub draft. It performs no compilation or image rebuild. Only after remote identities and anonymous image access match does it make that draft public.
 
 Review the published `release-receipt.json`, `release-verification.json` and `publication.json`, including full source SHA, run ID, checksums/sizes, image index digest and both platform digests. Use the digest from that verified record for standalone deployment. The add-on uses the coordinated version tag, so keep GHCR writers restricted and version tags immutable. Registry writes require external protection; this script cannot create a registry-wide atomic tag policy.
 
@@ -84,3 +84,19 @@ For an unsuccessful transfer, inspect protected job logs and remote identities. 
 **Rescan published image** is scheduled for Mondays at 06:31 UTC and can be dispatched manually. With publication enabled, it retrieves the latest public release's `publication.json`, validates version/platform identities and resolves the immutable image index digest. It scans that same published image on both `amd64` and `arm64`, failing on HIGH/CRITICAL findings and retaining `published-image-rescan-<run-id>` reports for 30 days.
 
 The rescan does not rebuild, alter the image or republish a release. Investigate new findings, fix affected source/dependencies and release a new complete candidate through the normal gates. A scheduled scan cannot run successfully before a public release record and accessible image exist; verify the first real execution explicitly.
+
+## First GHCR package visibility
+
+[GitHub defaults a newly uploaded GHCR package to private](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry).
+The publisher independently requests an anonymous pull token and verifies the
+exact version tag, root/platform manifests and each config/layer identity.
+Publisher credentials never substitute for public access. If that check fails,
+the uploaded image and release assets remain available for verification while
+the GitHub release stays a draft.
+
+In the account's **Packages** page, open **ha-wolf-manager**, choose **Package
+settings**, and change visibility to **Public**. GitHub documents this as an
+irreversible visibility change; it is part of publishing the public product.
+Then rerun the protected publisher with the same successful candidate run ID.
+It verifies the existing immutable bytes and completes publication without
+rebuilding or rebinding tags. Confirm anonymous pulls for both architectures.
