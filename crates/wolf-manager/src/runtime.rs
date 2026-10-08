@@ -24,6 +24,8 @@ pub enum Mode {
 #[derive(Parser, Debug)]
 #[command(name = "ha-wolf-manager", version)]
 pub struct Cli {
+    #[arg(skip)]
+    pub startup_options: Option<crate::ha_bootstrap::AddonOptions>,
     #[command(subcommand)]
     pub command: Option<Command>,
     #[arg(long, env = "WOLF_DATA_DIR", default_value = "/data")]
@@ -66,6 +68,18 @@ pub struct Cli {
 #[derive(Subcommand, Debug)]
 pub enum Command {
     Healthcheck,
+    Backup {
+        #[arg(long)]
+        destination: PathBuf,
+    },
+    RestorePreview {
+        #[arg(long)]
+        bundle: PathBuf,
+    },
+    Restore {
+        #[arg(long)]
+        bundle: PathBuf,
+    },
     ResetPassword {
         #[arg(long)]
         password_file: PathBuf,

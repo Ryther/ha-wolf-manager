@@ -16,7 +16,15 @@ use std::{
 };
 use wolf_core::{PcId, RPC_MAX_BYTES, RpcRequest, RpcResponse, SafeError};
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(810);
+fn request_timeout(operation: &wolf_core::RpcOperation) -> Duration {
+    use wolf_core::RpcOperation::*;
+    match operation {
+        Start(_) | Stop(_) | Restart(_) => REQUEST_TIMEOUT,
+        ApplySettings(_) => Duration::from_secs(60),
+        Preflight(_) | Status(_) | BoundedLogs(_) | RequestStatus(_) => Duration::from_secs(30),
+    }
+}
 const OUTPUT_LIMIT: usize = 1024 * 1024;
 const STDERR_LIMIT: usize = 16 * 1024;
 const COMMAND: &str = "wolf-manager-rpc-v1";
@@ -313,7 +321,7 @@ impl ReadyClient {
         if input.len() > RPC_MAX_BYTES {
             return Err(SafeError::new("payload_too_large"));
         }
-        tokio::time::timeout(REQUEST_TIMEOUT, async {
+        tokio::time::timeout(request_timeout(&request.operation), async {
             let mut channel = self.handle.channel_open_session().await.map_err(internal)?;
             channel.exec(true, COMMAND).await.map_err(internal)?;
             // Wait for exec acceptance before submitting the typed stdin payload.
@@ -366,5 +374,47 @@ impl ReadyClient {
         })
         .await
         .map_err(internal)?
+    }
+}
+
+#[cfg(test)]
+mod timeout_tests {
+    use super::*;
+    use wolf_core::{EmptyPayload, RpcOperation};
+    #[test]
+    fn lifecycle_budget_exceeds_fixed_host_ceiling() {
+        for operation in [
+            RpcOperation::Start(wolf_core::StartPayload {
+                expected_staged_revision: wolf_core::Settings::default().revision().unwrap(),
+            }),
+            RpcOperation::Stop(EmptyPayload {}),
+            RpcOperation::Restart(wolf_core::StartPayload {
+                expected_staged_revision: wolf_core::Settings::default().revision().unwrap(),
+            }),
+        ] {
+            assert_eq!(request_timeout(&operation), Duration::from_secs(810));
+        }
+        assert!(config().inactivity_timeout.unwrap() >= Duration::from_secs(810));
+    }
+    #[test]
+    fn readonly_budget_is_shorter_than_lifecycle() {
+        let settings = wolf_core::Settings::default();
+        assert_eq!(
+            request_timeout(&RpcOperation::ApplySettings(
+                wolf_core::ApplySettingsPayload {
+                    revision: settings.revision().unwrap(),
+                    settings
+                }
+            )),
+            Duration::from_secs(60)
+        );
+        assert_eq!(
+            request_timeout(&RpcOperation::Status(EmptyPayload {})),
+            Duration::from_secs(30)
+        );
+        assert_eq!(
+            request_timeout(&RpcOperation::Preflight(EmptyPayload {})),
+            Duration::from_secs(30)
+        );
     }
 }

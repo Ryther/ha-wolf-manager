@@ -16,3 +16,7 @@ pub mod ha_bootstrap;
 pub mod mqtt;
 mod mqtt_runtime;
 pub mod runtime;
+
+pub mod bundle;
+
+pub mod init;

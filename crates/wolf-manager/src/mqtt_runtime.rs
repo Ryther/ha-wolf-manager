@@ -50,10 +50,14 @@ async fn registrations(state: &AppState) -> Result<Vec<Registration>, SafeError>
 async fn build(state: &AppState, cli: &Cli) -> Result<ManagerMqtt, SafeError> {
     let config = broker(cli).await?;
     let topics = if matches!(state.mode, Deployment::Ingress) {
-        let path = cli.options_file.clone();
-        let options = tokio::task::spawn_blocking(move || read_options(&path))
-            .await
-            .map_err(internal)??;
+        let options = if let Some(options) = &cli.startup_options {
+            options.clone()
+        } else {
+            let path = cli.options_file.clone();
+            tokio::task::spawn_blocking(move || read_options(&path))
+                .await
+                .map_err(internal)??
+        };
         Topics::new(&options.topic_base, &options.discovery_prefix)?
     } else {
         Topics::new(&cli.topic_base, &cli.discovery_prefix)?
