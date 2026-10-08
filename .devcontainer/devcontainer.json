@@ -1,0 +1,18 @@
+{
+  "name": "HA Wolf Manager development",
+  "dockerComposeFile": "compose.yaml",
+  "service": "devcontainer",
+  "workspaceFolder": "/workspaces/ha-wolf-manager",
+  "remoteUser": "vscode",
+  "shutdownAction": "stopCompose",
+  "postCreateCommand": "sh .devcontainer/post-create.sh",
+  "remoteEnv": { "SSH_AUTH_SOCK": "" },
+  "forwardPorts": [8099],
+  "portsAttributes": { "8099": { "label": "Development manager", "onAutoForward": "notify" } },
+  "otherPortsAttributes": { "onAutoForward": "ignore" },
+  "customizations": {
+    "vscode": {
+      "extensions": ["rust-lang.rust-analyzer", "tamasfe.even-better-toml", "ms-playwright.playwright"]
+    }
+  }
+}

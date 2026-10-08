@@ -1,0 +1,32 @@
+name: ha-wolf-manager-dev
+services:
+  devcontainer:
+    build:
+      context: .
+    command: sleep infinity
+    init: true
+    shm_size: 1gb
+    network_mode: service:mqtt
+    depends_on:
+      mqtt:
+        condition: service_healthy
+    volumes:
+      - ..:/workspaces/ha-wolf-manager
+      - cargo-cache:/home/vscode/.cargo
+      - rust-target:/home/vscode/.cache/wolf-target
+    environment:
+      WOLF_TEST_MQTT_HOST: 127.0.0.1
+      WOLF_TEST_MQTT_PORT: "18889"
+      SSH_AUTH_SOCK: ""
+  mqtt:
+    image: eclipse-mosquitto:2.1.2-alpine@sha256:38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    healthcheck:
+      test: [CMD, mosquitto_pub, -h, 127.0.0.1, -p, "18889", -t, dev/health, -m, healthy, -q, "1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+volumes:
+  cargo-cache:
+  rust-target:
