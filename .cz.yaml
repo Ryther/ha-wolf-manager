@@ -1,0 +1,8 @@
+# Commit messages only. Release Please owns all versions and changelog updates.
+commitizen:
+  name: cz_customize
+  customize:
+    message_template: "{{prefix}}{% if scope %}({{scope}}){% endif %}: {{subject}}"
+    example: "feat(host): preserve Steam changes during recovery"
+    schema: "<type>(<scope>)[!]: [gh-<issue>] <subject>"
+    schema_pattern: '(?s)^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|devcontainer|conf)(\([^()\r\n]+\))?!?: (\[gh-\d+\] )?[^\r\n]+(?:\n\n.*)?$'
