@@ -9,8 +9,8 @@ Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/local/bin/wolf-manager-host lifecycle-start
 ExecStop=/usr/local/bin/wolf-manager-host lifecycle-stop
-TimeoutStartSec=370
-TimeoutStopSec=190
+TimeoutStartSec=@START_TIMEOUT@
+TimeoutStopSec=180
 
 [Install]
 WantedBy=multi-user.target

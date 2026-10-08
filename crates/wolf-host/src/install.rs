@@ -388,10 +388,15 @@ fn recipes(request: &InstallRequest) -> io::Result<Vec<Recipe>> {
         uid: 0,
         gid: 0,
     });
-    let (path, unit)=match request.mode { InstallMode::Install => (PathBuf::from(format!("/etc/systemd/system/{}",request.policy.service_unit)), include_str!("../../../installer/templates/wolf.service").to_owned()), InstallMode::Adopt => (PathBuf::from(format!("/etc/systemd/system/{}.d/90-wolf-manager.conf",request.policy.service_unit)), "# Managed by HA Wolf Manager\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStartPre=\nExecStart=\nExecStart=/usr/local/bin/wolf-manager-host lifecycle-start\nExecStop=\nExecStop=/usr/local/bin/wolf-manager-host lifecycle-stop\nExecStopPost=\nTimeoutStartSec=370\nTimeoutStopSec=190\n".to_owned()) };
+    let (path, unit)=match request.mode { InstallMode::Install => (PathBuf::from(format!("/etc/systemd/system/{}",request.policy.service_unit)), include_str!("../../../installer/templates/wolf.service").to_owned()), InstallMode::Adopt => (PathBuf::from(format!("/etc/systemd/system/{}.d/90-wolf-manager.conf",request.policy.service_unit)), "# Managed by HA Wolf Manager\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStartPre=\nExecStart=\nExecStart=/usr/local/bin/wolf-manager-host lifecycle-start\nExecStop=\nExecStop=/usr/local/bin/wolf-manager-host lifecycle-stop\nExecStopPost=\nTimeoutStartSec=@START_TIMEOUT@\nTimeoutStopSec=180\n".to_owned()) };
     recipes.push(Recipe {
         path,
-        bytes: unit.into_bytes(),
+        bytes: unit
+            .replace(
+                "@START_TIMEOUT@",
+                &(request.policy.pull_timeout_seconds + 185).to_string(),
+            )
+            .into_bytes(),
         mode: 0o644,
         uid: 0,
         gid: 0,
@@ -476,7 +481,28 @@ fn recipes(request: &InstallRequest) -> io::Result<Vec<Recipe>> {
     }
     Ok(recipes)
 }
+fn validate_locked_home() -> io::Result<()> {
+    let home = Path::new("/nonexistent");
+    match fs::symlink_metadata(home) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+        Ok(metadata)
+            if !metadata.is_dir() || metadata.uid() != 0 || metadata.mode() & 0o022 != 0 =>
+        {
+            return Err(fail("managed home authority is unsafe"));
+        }
+        Ok(_) => {}
+    }
+    match fs::symlink_metadata(home.join(".ssh")) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+        Ok(_) => Err(fail(
+            "managed home has SSH state; no implicit adoption of user environment",
+        )),
+    }
+}
 fn account_exists() -> io::Result<bool> {
+    validate_locked_home()?;
     let passwd = fs::read_to_string("/etc/passwd")?;
     let Some(line) = passwd.lines().find(|l| l.starts_with("wolf-manager:")) else {
         return Ok(false);
@@ -616,6 +642,9 @@ fn preflight_with(request: &InstallRequest, environment: &Environment) -> io::Re
         ));
     }
     request.policy.validate_install_prerequisites()?;
+    if !environment.fixture() {
+        validate_ssh_policy_tree(Path::new("/etc/ssh/sshd_config"), Path::new("/etc/ssh"))?;
+    }
     let existing_policy_path = environment.path(Path::new("/etc/wolf-manager/host-policy.json"));
     let existing_policy = existing_policy_path.as_path();
     if existing_policy.exists() {
@@ -762,7 +791,143 @@ fn create_file(path: &Path, bytes: &[u8], mode: u32, uid: u32, gid: u32) -> io::
     f.sync_all()?;
     File::open(path.parent().unwrap())?.sync_all()
 }
+// Conservative first-release parser: no conditional policy outside our exact fragment.
+// Include paths are bounded, root-trusted and opened without following aliases.
+fn validate_ssh_policy_tree(path: &Path, include_base: &Path) -> io::Result<()> {
+    fn matches(pattern: &[u8], value: &[u8]) -> bool {
+        let mut row = vec![false; value.len() + 1];
+        row[0] = true;
+        for c in pattern {
+            let mut next = vec![false; value.len() + 1];
+            if *c == b'*' {
+                next[0] = row[0];
+            }
+            for i in 1..=value.len() {
+                next[i] = if *c == b'*' {
+                    row[i] || next[i - 1]
+                } else {
+                    row[i - 1] && (*c == b'?' || *c == value[i - 1])
+                };
+            }
+            row = next;
+        }
+        row[value.len()]
+    }
+    fn visit(
+        path: &Path,
+        base: &Path,
+        seen: &mut std::collections::BTreeSet<PathBuf>,
+        total: &mut usize,
+        depth: usize,
+    ) -> io::Result<()> {
+        if depth > 16 || seen.len() >= 128 || !seen.insert(path.to_owned()) {
+            return Err(fail("SSH include cycle or bounds exceeded"));
+        }
+        trusted_path(path, 0, false)?;
+        let file = File::from(rustix::fs::openat2(
+            rustix::fs::CWD,
+            path,
+            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+            rustix::fs::ResolveFlags::NO_SYMLINKS | rustix::fs::ResolveFlags::NO_MAGICLINKS,
+        )?);
+        let mut bytes = Vec::new();
+        file.take(1024 * 1024 + 1).read_to_end(&mut bytes)?;
+        *total += bytes.len();
+        if *total > 1024 * 1024 {
+            return Err(fail("SSH configuration exceeds bounded size"));
+        }
+        if path == Path::new("/etc/ssh/sshd_config.d/90-wolf-manager.conf")
+            && bytes == include_bytes!("../../../installer/templates/90-wolf-manager.conf")
+        {
+            return Ok(());
+        }
+        let text =
+            std::str::from_utf8(&bytes).map_err(|_| fail("SSH configuration is not UTF-8"))?;
+        for line in text.lines() {
+            let line = line.trim_start();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let line = line.split('#').next().unwrap().trim();
+            let words = line.split_ascii_whitespace().collect::<Vec<_>>();
+            let directive = words[0].split('=').next().unwrap();
+            if directive.eq_ignore_ascii_case("Match") {
+                return Err(fail(
+                    "pre-existing conditional SSH Match policy requires explicit operator review",
+                ));
+            }
+            if !directive.eq_ignore_ascii_case("Include") {
+                continue;
+            }
+            if words.len() < 2 || words[0].contains('=') {
+                return Err(fail("unsupported SSH Include syntax"));
+            }
+            for token in &words[1..] {
+                if token.bytes().any(|c| b"\\\"'[]{}".contains(&c)) {
+                    return Err(fail(
+                        "complex SSH Include syntax requires explicit operator review",
+                    ));
+                }
+                let include = if Path::new(token).is_absolute() {
+                    PathBuf::from(token)
+                } else {
+                    base.join(token)
+                };
+                let parent = include
+                    .parent()
+                    .ok_or_else(|| fail("invalid SSH include"))?;
+                if parent.to_string_lossy().contains(['*', '?']) {
+                    return Err(fail("SSH wildcard directories are unsupported"));
+                }
+                let name = include
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .ok_or_else(|| fail("invalid SSH include name"))?;
+                if name.contains(['*', '?']) {
+                    if !parent.exists() {
+                        continue;
+                    }
+                    trusted_path(parent, 0, true)?;
+                    let mut selected = Vec::new();
+                    for (index, entry) in fs::read_dir(parent)?.enumerate() {
+                        if index >= 1024 {
+                            return Err(fail("SSH include directory exceeds bounds"));
+                        }
+                        let entry = entry?;
+                        let file_name = entry.file_name();
+                        let file_name = file_name
+                            .to_str()
+                            .ok_or_else(|| fail("non-UTF8 SSH include filename"))?;
+                        if matches(name.as_bytes(), file_name.as_bytes()) {
+                            selected.push(entry.path());
+                        }
+                    }
+                    selected.sort();
+                    for child in selected {
+                        visit(&child, base, seen, total, depth + 1)?;
+                    }
+                } else {
+                    match fs::symlink_metadata(&include) {
+                        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                        Err(e) => return Err(e),
+                        Ok(_) => visit(&include, base, seen, total, depth + 1)?,
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+    visit(
+        path,
+        include_base,
+        &mut std::collections::BTreeSet::new(),
+        &mut 0,
+        0,
+    )
+}
 fn validate_configs(folder: &Path, recipes: &[Recipe]) -> io::Result<()> {
+    validate_ssh_policy_tree(Path::new("/etc/ssh/sshd_config"), Path::new("/etc/ssh"))?;
     let sudo = recipes
         .iter()
         .find(|r| r.path == Path::new("/etc/sudoers.d/wolf-manager"))
@@ -803,6 +968,58 @@ fn validate_configs(folder: &Path, recipes: &[Recipe]) -> io::Result<()> {
         .success()
     {
         return Err(fail("sshd validation failed before activation"));
+    }
+    let output = Command::new(sshd)
+        .args(["-T", "-f"])
+        .arg(&ssh_path)
+        .args(["-C", "user=wolf-manager,host=localhost,addr=127.0.0.1"])
+        .env_clear()
+        .output()?;
+    if !output.status.success() {
+        return Err(fail("effective SSH account policy could not be evaluated"));
+    }
+    let effective =
+        std::str::from_utf8(&output.stdout).map_err(|_| fail("invalid effective SSH output"))?;
+    let normalized: Vec<String> = effective
+        .lines()
+        .filter_map(|line| {
+            line.split_once(' ')
+                .map(|(key, value)| format!("{} {}", key.to_ascii_lowercase(), value))
+        })
+        .collect();
+    let environment = normalized
+        .iter()
+        .map(String::as_str)
+        .filter(|line| line.starts_with("acceptenv "))
+        .collect::<Vec<_>>();
+    if environment != ["acceptenv WOLF_MANAGER_UNUSED_ENV"] {
+        return Err(fail("inherited client environment policy is not bounded"));
+    }
+    if normalized
+        .iter()
+        .any(|line| line.starts_with("setenv ") && line != "setenv none")
+    {
+        return Err(fail("inherited server environment policy is not bounded"));
+    }
+    for expected in [
+        "authenticationmethods publickey",
+        "authorizedkeyscommand none",
+        "trustedusercakeys none",
+        "authorizedprincipalscommand none",
+        "authorizedprincipalsfile none",
+        "passwordauthentication no",
+        "kbdinteractiveauthentication no",
+        "permittty no",
+        "disableforwarding yes",
+        "permituserrc no",
+        "forcecommand /usr/libexec/wolf-manager/ssh-dispatcher",
+        "authorizedkeysfile /etc/ssh/authorized_keys.d/wolf-manager",
+    ] {
+        if !normalized.iter().any(|line| line == expected) {
+            return Err(fail(
+                "effective SSH account policy differs from restricted contract",
+            ));
+        }
     }
     Ok(())
 }
@@ -2029,5 +2246,33 @@ mod root_fixture_tests {
         assert_eq!(fs::read(&config).unwrap(), paired);
         assert!(report.retained_files.contains(&config));
         assert!(fixture.request.policy.compose_file.exists());
+    }
+    #[test]
+    #[ignore = "run only in a disposable root container"]
+    fn nonlocal_ssh_match_in_nested_include_refuses_without_changing_config() {
+        assert_eq!(rustix::process::geteuid().as_raw(), 0);
+        let directory = tempfile::Builder::new()
+            .prefix("wolf-ssh-")
+            .tempdir_in("/root")
+            .unwrap();
+        let root = directory.path();
+        fs::create_dir(root.join("conf.d")).unwrap();
+        let config = root.join("sshd_config");
+        let original = format!("AcceptEnv LANG\nInclude {}/conf.d/*.conf\n", root.display());
+        fs::write(&config, &original).unwrap();
+        let nested = root.join("conf.d/nonlocal.conf");
+        let dangerous = b"Match Address 192.168.50.0/24\nForceCommand /bin/sh\nAcceptEnv *\n";
+        fs::write(&nested, dangerous).unwrap();
+        assert!(validate_ssh_policy_tree(&config, root).is_err());
+        assert_eq!(fs::read(&config).unwrap(), original.as_bytes());
+        assert_eq!(fs::read(&nested).unwrap(), dangerous);
+        fs::write(&nested, b"AcceptEnv LANG\n").unwrap();
+        validate_ssh_policy_tree(&config, root).unwrap();
+        fs::write(&nested, format!("Include {}\n", config.display())).unwrap();
+        assert!(validate_ssh_policy_tree(&config, root).is_err());
+        fs::remove_file(&nested).unwrap();
+        std::os::unix::fs::symlink(&config, &nested).unwrap();
+        assert!(validate_ssh_policy_tree(&config, root).is_err());
+        assert_eq!(fs::read(&config).unwrap(), original.as_bytes());
     }
 }

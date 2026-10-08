@@ -1,0 +1,188 @@
+{
+  "scope": "Measured disposable container SSH/sudo restrictions and offline systemd syntax; not native Rust RPC, systemd PID1, real OS, GPU or Wolf streaming certification",
+  "verified_at": "2026-10-08",
+  "results": [
+    {
+      "family": "arch",
+      "image": "archlinux@sha256:4e77cf2ea5f410e6f8be5abf93ccf17ce2436e87a138c167208356711a405dbd",
+      "returncode": 0,
+      "evidence": {
+        "account_restriction": true,
+        "client_shell_loader_environment_rejected": true,
+        "global_client_environment_override_bounded": true,
+        "inherited_alternate_key_authority_disabled": true,
+        "native_rpc_tested_by_this_fixture": false,
+        "offline_systemd_unit_syntax": true,
+        "os_release": "NAME=\"Arch Linux\"\nPRETTY_NAME=\"Arch Linux\"\nID=arch\nBUILD_ID=rolling\nVERSION_ID=20261004.0.606936\nANSI_COLOR=\"38;2;23;147;209\"\nHOME_URL=\"https://archlinux.org/\"\nDOCUMENTATION_URL=\"https://wiki.archlinux.org/\"\nSUPPORT_URL=\"https://bbs.archlinux.org/\"\nBUG_REPORT_URL=\"https://gitlab.archlinux.org/groups/archlinux/-/issues\"\nPRIVACY_POLICY_URL=\"https://terms.archlinux.org/docs/privacy-policy/\"\nLOGO=archlinux-logo\n",
+        "package_versions": {
+          "openssh": "OpenSSH_10.6p1, OpenSSL 3.6.5 29 Sep 2026",
+          "sudo": "Sudo version 1.9.17p2",
+          "systemd": "systemd 262 (262-1-arch)"
+        },
+        "public_key_target_uid_readable_root_nonwritable": true,
+        "real_ssh_allowed_command_only_no_forwarding": true,
+        "scope": "container-only; SSH transport and policy, offline unit syntax; no real OS/GPU/Wolf streaming",
+        "sshd_effective_match_policy": true,
+        "sudo_exact_no_arguments": true,
+        "systemd_pid1_or_real_streaming_tested": false,
+        "user_environment_inputs_unavailable_without_global_changes": true
+      }
+    },
+    {
+      "family": "cachyos",
+      "image": "cachyos/cachyos@sha256:ac10118ac932d93181daab153de74c6c335d19d8effb4b254b3168074c77e820",
+      "returncode": 0,
+      "evidence": {
+        "account_restriction": true,
+        "client_shell_loader_environment_rejected": true,
+        "global_client_environment_override_bounded": true,
+        "inherited_alternate_key_authority_disabled": true,
+        "native_rpc_tested_by_this_fixture": false,
+        "offline_systemd_unit_syntax": true,
+        "os_release": "NAME=\"CachyOS Linux\"\nPRETTY_NAME=\"CachyOS\"\nID=cachyos\nID_LIKE=arch\nBUILD_ID=rolling\nVERSION_ID=20261004.0.606936\nANSI_COLOR=\"38;2;23;147;209\"\nHOME_URL=\"https://cachyos.org/\"\nDOCUMENTATION_URL=\"https://wiki.cachyos.org/\"\nSUPPORT_URL=\"https://discuss.cachyos.org/\"\nBUG_REPORT_URL=\"https://github.com/cachyos\"\nPRIVACY_POLICY_URL=\"https://terms.archlinux.org/docs/privacy-policy/\"\nLOGO=cachyos\n",
+        "package_versions": {
+          "openssh": "OpenSSH_10.6p1, OpenSSL 3.6.5 29 Sep 2026",
+          "sudo": "Sudo version 1.9.17p2",
+          "systemd": "systemd 262 (262-1-arch)"
+        },
+        "public_key_target_uid_readable_root_nonwritable": true,
+        "real_ssh_allowed_command_only_no_forwarding": true,
+        "scope": "container-only; SSH transport and policy, offline unit syntax; no real OS/GPU/Wolf streaming",
+        "sshd_effective_match_policy": true,
+        "sudo_exact_no_arguments": true,
+        "systemd_pid1_or_real_streaming_tested": false,
+        "user_environment_inputs_unavailable_without_global_changes": true
+      }
+    },
+    {
+      "family": "debian",
+      "image": "debian@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f",
+      "returncode": 0,
+      "evidence": {
+        "account_restriction": true,
+        "client_shell_loader_environment_rejected": true,
+        "global_client_environment_override_bounded": true,
+        "inherited_alternate_key_authority_disabled": true,
+        "native_rpc_tested_by_this_fixture": false,
+        "offline_systemd_unit_syntax": true,
+        "os_release": "PRETTY_NAME=\"Debian GNU/Linux 13 (trixie)\"\nNAME=\"Debian GNU/Linux\"\nVERSION_ID=\"13\"\nVERSION=\"13 (trixie)\"\nVERSION_CODENAME=trixie\nDEBIAN_VERSION_FULL=13.7\nID=debian\nHOME_URL=\"https://www.debian.org/\"\nSUPPORT_URL=\"https://www.debian.org/support\"\nBUG_REPORT_URL=\"https://bugs.debian.org/\"\n",
+        "package_versions": {
+          "openssh": "OpenSSH_10.0p2 Debian-7+deb13u4, OpenSSL 3.5.7 9 Jun 2026",
+          "sudo": "Sudo version 1.9.16p2",
+          "systemd": "systemd 257 (257.13-1~deb13u1)"
+        },
+        "public_key_target_uid_readable_root_nonwritable": true,
+        "real_ssh_allowed_command_only_no_forwarding": true,
+        "scope": "container-only; SSH transport and policy, offline unit syntax; no real OS/GPU/Wolf streaming",
+        "sshd_effective_match_policy": true,
+        "sudo_exact_no_arguments": true,
+        "systemd_pid1_or_real_streaming_tested": false,
+        "user_environment_inputs_unavailable_without_global_changes": true
+      }
+    },
+    {
+      "family": "ubuntu",
+      "image": "ubuntu@sha256:f144425ff09be612d6d9ad965196e9cdc23dae1f42110a8a11a3e9a8198759f7",
+      "returncode": 0,
+      "evidence": {
+        "account_restriction": true,
+        "client_shell_loader_environment_rejected": true,
+        "global_client_environment_override_bounded": true,
+        "inherited_alternate_key_authority_disabled": true,
+        "native_rpc_tested_by_this_fixture": false,
+        "offline_systemd_unit_syntax": true,
+        "os_release": "PRETTY_NAME=\"Ubuntu 26.04.1 LTS\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"26.04\"\nVERSION=\"26.04.1 LTS (Resolute Raccoon)\"\nVERSION_CODENAME=resolute\nID=ubuntu\nID_LIKE=debian\nHOME_URL=\"https://www.ubuntu.com/\"\nSUPPORT_URL=\"https://help.ubuntu.com/\"\nBUG_REPORT_URL=\"https://bugs.launchpad.net/ubuntu/\"\nPRIVACY_POLICY_URL=\"https://www.ubuntu.com/legal/terms-and-policies/privacy-policy\"\nUBUNTU_CODENAME=resolute\nLOGO=ubuntu-logo\n",
+        "package_versions": {
+          "openssh": "OpenSSH_10.2p1 Ubuntu-2ubuntu3.7, OpenSSL 3.5.5 27 Jan 2026",
+          "sudo": "Sudo version 1.9.17p2",
+          "systemd": "systemd 259 (259.5-0ubuntu3.4)"
+        },
+        "public_key_target_uid_readable_root_nonwritable": true,
+        "real_ssh_allowed_command_only_no_forwarding": true,
+        "scope": "container-only; SSH transport and policy, offline unit syntax; no real OS/GPU/Wolf streaming",
+        "sshd_effective_match_policy": true,
+        "sudo_exact_no_arguments": true,
+        "systemd_pid1_or_real_streaming_tested": false,
+        "user_environment_inputs_unavailable_without_global_changes": true
+      }
+    },
+    {
+      "family": "fedora",
+      "image": "registry.fedoraproject.org/fedora@sha256:ba35579e107f26a4c2c000390fb3ff549f3858a9584a6b5a35f7fa51f54de309",
+      "returncode": 0,
+      "evidence": {
+        "account_restriction": true,
+        "client_shell_loader_environment_rejected": true,
+        "global_client_environment_override_bounded": true,
+        "inherited_alternate_key_authority_disabled": true,
+        "native_rpc_tested_by_this_fixture": false,
+        "offline_systemd_unit_syntax": true,
+        "os_release": "NAME=\"Fedora Linux\"\nVERSION=\"44 (Container Image)\"\nRELEASE_TYPE=stable\nID=fedora\nVERSION_ID=44\nVERSION_CODENAME=\"\"\nPRETTY_NAME=\"Fedora Linux 44 (Container Image)\"\nANSI_COLOR=\"0;38;2;60;110;180\"\nLOGO=fedora-logo-icon\nCPE_NAME=\"cpe:/o:fedoraproject:fedora:44\"\nDEFAULT_HOSTNAME=\"fedora\"\nHOME_URL=\"https://fedoraproject.org/\"\nDOCUMENTATION_URL=\"https://docs.fedoraproject.org/en-US/fedora/f44/\"\nSUPPORT_URL=\"https://ask.fedoraproject.org/\"\nBUG_REPORT_URL=\"https://bugzilla.redhat.com/\"\nREDHAT_BUGZILLA_PRODUCT=\"Fedora\"\nREDHAT_BUGZILLA_PRODUCT_VERSION=44\nREDHAT_SUPPORT_PRODUCT=\"Fedora\"\nREDHAT_SUPPORT_PRODUCT_VERSION=44\nSUPPORT_END=2027-05-19\nVARIANT=\"Container Image\"\nVARIANT_ID=container\n",
+        "package_versions": {
+          "openssh": "OpenSSH_10.2p1, OpenSSL 3.5.9 29 Sep 2026",
+          "sudo": "Sudo version 1.9.17p2",
+          "systemd": "systemd 259 (259.9-1.fc44)"
+        },
+        "public_key_target_uid_readable_root_nonwritable": true,
+        "real_ssh_allowed_command_only_no_forwarding": true,
+        "scope": "container-only; SSH transport and policy, offline unit syntax; no real OS/GPU/Wolf streaming",
+        "sshd_effective_match_policy": true,
+        "sudo_exact_no_arguments": true,
+        "systemd_pid1_or_real_streaming_tested": false,
+        "user_environment_inputs_unavailable_without_global_changes": true
+      }
+    },
+    {
+      "family": "leap",
+      "image": "registry.opensuse.org/opensuse/leap@sha256:cd9aac11608afabc96a10074619cf2a65ccf60ff4b72d09d4e4e125af409035d",
+      "returncode": 0,
+      "evidence": {
+        "account_restriction": true,
+        "client_shell_loader_environment_rejected": true,
+        "global_client_environment_override_bounded": true,
+        "inherited_alternate_key_authority_disabled": true,
+        "native_rpc_tested_by_this_fixture": false,
+        "offline_systemd_unit_syntax": true,
+        "os_release": "NAME=\"openSUSE Leap\"\nVERSION=\"16.0\"\nID=\"opensuse-leap\"\nID_LIKE=\"suse opensuse\"\nVERSION_ID=\"16.0\"\nPRETTY_NAME=\"openSUSE Leap 16.0\"\nANSI_COLOR=\"0;32\"\nCPE_NAME=\"cpe:/o:opensuse:leap:16.0\"\nBUG_REPORT_URL=\"https://bugs.opensuse.org\"\nHOME_URL=\"https://www.opensuse.org/\"\nDOCUMENTATION_URL=\"https://en.opensuse.org/Portal:Leap\"\nLOGO=\"distributor-logo-Leap\"\n",
+        "package_versions": {
+          "openssh": "OpenSSH_10.0p2, OpenSSL 3.5.0 8 Apr 2025",
+          "sudo": "Sudo version 1.9.17p1",
+          "systemd": "systemd 257 (257.13+suse.131.g575b4807b7)"
+        },
+        "public_key_target_uid_readable_root_nonwritable": true,
+        "real_ssh_allowed_command_only_no_forwarding": true,
+        "scope": "container-only; SSH transport and policy, offline unit syntax; no real OS/GPU/Wolf streaming",
+        "sshd_effective_match_policy": true,
+        "sudo_exact_no_arguments": true,
+        "systemd_pid1_or_real_streaming_tested": false,
+        "user_environment_inputs_unavailable_without_global_changes": true
+      }
+    },
+    {
+      "family": "tumbleweed",
+      "image": "registry.opensuse.org/opensuse/tumbleweed@sha256:85386b1c2330a5e72a720099327b682dc681e4eb47dea892c0153090e7e704c5",
+      "returncode": 0,
+      "evidence": {
+        "account_restriction": true,
+        "client_shell_loader_environment_rejected": true,
+        "global_client_environment_override_bounded": true,
+        "inherited_alternate_key_authority_disabled": true,
+        "native_rpc_tested_by_this_fixture": false,
+        "offline_systemd_unit_syntax": true,
+        "os_release": "NAME=\"openSUSE Tumbleweed\"\n# VERSION=\"20261007\"\nID=\"opensuse-tumbleweed\"\nID_LIKE=\"opensuse suse\"\nVERSION_ID=\"20261007\"\nPRETTY_NAME=\"openSUSE Tumbleweed\"\nANSI_COLOR=\"0;32\"\n# CPE 2.3 format, boo#1217921\nCPE_NAME=\"cpe:2.3:o:opensuse:tumbleweed:20261007:*:*:*:*:*:*:*\"\n#CPE 2.2 format\n#CPE_NAME=\"cpe:/o:opensuse:tumbleweed:20261007\"\nBUG_REPORT_URL=\"https://bugzilla.opensuse.org\"\nSUPPORT_URL=\"https://bugs.opensuse.org\"\nHOME_URL=\"https://www.opensuse.org\"\nDOCUMENTATION_URL=\"https://en.opensuse.org/Portal:Tumbleweed\"\nLOGO=\"distributor-logo-Tumbleweed\"\n",
+        "package_versions": {
+          "openssh": "OpenSSH_10.5p1, OpenSSL 3.5.3 16 Sep 2025",
+          "sudo": "Sudo version 1.9.17p2",
+          "systemd": "systemd 261 (261.3)"
+        },
+        "public_key_target_uid_readable_root_nonwritable": true,
+        "real_ssh_allowed_command_only_no_forwarding": true,
+        "scope": "container-only; SSH transport and policy, offline unit syntax; no real OS/GPU/Wolf streaming",
+        "sshd_effective_match_policy": true,
+        "sudo_exact_no_arguments": true,
+        "systemd_pid1_or_real_streaming_tested": false,
+        "user_environment_inputs_unavailable_without_global_changes": true
+      }
+    }
+  ]
+}
