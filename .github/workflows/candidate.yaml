@@ -617,11 +617,12 @@ jobs:
           -Dsonar.sources=crates,web,scripts,installer
           -Dsonar.exclusions=**/tests/**,web/tests/**,scripts/ci/addon.schema.json
           -Dsonar.rust.lcov.reportPaths=_tmp/rust-evidence/rust.lcov
+          -Dsonar.rust.clippy.enabled=false
           -Dsonar.rust.clippyReport.reportPaths=_tmp/rust-evidence/clippy.json
           -Dsonar.qualitygate.wait=true
           -Dsonar.qualitygate.timeout=600
     - run: |-
-        python -m scripts.ci.sonar_gate --task .scannerwork/report-task.txt --sha "$CANDIDATE_SHA" --project "$SONAR_PROJECT_KEY" --output _tmp/evidence/sonar-analysis.json
+        python -m scripts.ci.sonar_gate --task .scannerwork/report-task.txt --sha "$CANDIDATE_SHA" --project "$SONAR_PROJECT_KEY" --rust-lcov _tmp/rust-evidence/rust.lcov --output _tmp/evidence/sonar-analysis.json
       env:
         SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}

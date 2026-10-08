@@ -177,3 +177,11 @@ all unchanged third-party lock entries are verified in memory.
 ```sh
 sh scripts/ci/release-metadata.sh
 ```
+
+## Rust coverage ingestion gate
+
+The Sonar job imports the frozen Rust job's LCOV and Clippy JSON reports. Automatic Clippy execution is disabled to avoid duplicate imported findings. The receiver requires the completed task, exact source revision, OK quality gate and unchanged latest analysis. Project-wide coverage alone is insufficient in this mixed Rust/JavaScript/Python project.
+
+`sonar_gate --rust-lcov <file>` parses production Rust `crates/*/src/**/*.rs` records and verifies each file's `lines_to_cover` and `uncovered_lines` through paginated `/api/measures/component_tree` results. Every expected file must match the LCOV counts, and at least one Rust line must actually be covered. Missing Rust import, all-zero reports, duplicate records, mismatched metrics or a concurrent analysis fail closed. The retained evidence includes the LCOV digest, Rust file count and covered-line count. This is a strict import check, not a replacement for the configured quality gate's coverage threshold.
+
+The [official Rust analyzer documentation](https://docs.sonarsource.com/sonarqube-cloud/advanced-setup/languages/rust/) documents LCOV/Clippy support and the automatic-Clippy setting. The [upstream measure API implementation](https://github.com/SonarSource/sonarqube/blob/master/server/sonar-webserver-webapi/src/main/java/org/sonar/server/measure/ws/ComponentTreeAction.java) defines paginated file-level measures. These interfaces were reviewed on 2026-10-08. Synthetic API tests prove local rejection/acceptance behavior; the first real Sonar analysis must still confirm server ingestion and permissions.
