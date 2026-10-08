@@ -312,6 +312,29 @@ pub async fn connect(endpoint: &Endpoint, data: &Path) -> Result<ReadyClient, Sa
     .await
     .map_err(internal)?
 }
+// Informational SSH messages are distinct from explicit exec acceptance.
+// The surrounding request timeout bounds the entire acknowledgement exchange.
+const EXEC_ACK_INFORMATIONAL_LIMIT: usize = 64;
+fn exec_acknowledged(
+    message: Option<ChannelMsg>,
+    informational: &mut usize,
+) -> Result<bool, SafeError> {
+    match message {
+        Some(ChannelMsg::Success) => Ok(true),
+        Some(ChannelMsg::WindowAdjusted { .. }) => {
+            *informational += 1;
+            if *informational > EXEC_ACK_INFORMATIONAL_LIMIT {
+                return Err(SafeError::validation());
+            }
+            Ok(false)
+        }
+        Some(ChannelMsg::Failure | ChannelMsg::Close | ChannelMsg::Eof) | None => {
+            Err(SafeError::new("forbidden"))
+        }
+        _ => Err(SafeError::validation()),
+    }
+}
+
 impl ReadyClient {
     /// Submit once after the coordinator durably records the child as sending.
     /// Failure after this call starts is uncertain and must never trigger replay.
@@ -325,13 +348,8 @@ impl ReadyClient {
             let mut channel = self.handle.channel_open_session().await.map_err(internal)?;
             channel.exec(true, COMMAND).await.map_err(internal)?;
             // Wait for exec acceptance before submitting the typed stdin payload.
-            match channel.wait().await {
-                Some(ChannelMsg::Success) => {}
-                Some(ChannelMsg::Failure) | Some(ChannelMsg::Close) | None => {
-                    return Err(SafeError::new("forbidden"));
-                }
-                _ => return Err(SafeError::validation()),
-            }
+            let mut informational = 0;
+            while !exec_acknowledged(channel.wait().await, &mut informational)? {}
             channel.data(input.as_slice()).await.map_err(internal)?;
             channel.eof().await.map_err(internal)?;
             let mut output = Vec::new();
@@ -415,6 +433,57 @@ mod timeout_tests {
         assert_eq!(
             request_timeout(&RpcOperation::Preflight(EmptyPayload {})),
             Duration::from_secs(30)
+        );
+    }
+}
+
+#[cfg(test)]
+mod exec_acknowledgement_tests {
+    use super::*;
+    #[test]
+    fn window_updates_never_authorize_stdin_before_explicit_success() {
+        let mut informational = 0;
+        for new_size in [65536, 131072] {
+            assert!(
+                !exec_acknowledged(
+                    Some(ChannelMsg::WindowAdjusted { new_size }),
+                    &mut informational
+                )
+                .unwrap()
+            );
+        }
+        assert!(exec_acknowledged(Some(ChannelMsg::Success), &mut informational).unwrap());
+    }
+    #[test]
+    fn denied_closed_eof_or_unexpected_acknowledgements_never_authorize_stdin() {
+        for message in [
+            Some(ChannelMsg::Failure),
+            Some(ChannelMsg::Close),
+            Some(ChannelMsg::Eof),
+            Some(ChannelMsg::ExitStatus { exit_status: 0 }),
+            None,
+        ] {
+            assert!(exec_acknowledged(message, &mut 0).is_err());
+        }
+    }
+    #[test]
+    fn unbounded_window_updates_are_refused_even_before_request_timeout() {
+        let mut informational = 0;
+        for _ in 0..EXEC_ACK_INFORMATIONAL_LIMIT {
+            assert!(
+                !exec_acknowledged(
+                    Some(ChannelMsg::WindowAdjusted { new_size: 65536 }),
+                    &mut informational
+                )
+                .unwrap()
+            );
+        }
+        assert!(
+            exec_acknowledged(
+                Some(ChannelMsg::WindowAdjusted { new_size: 65536 }),
+                &mut informational
+            )
+            .is_err()
         );
     }
 }

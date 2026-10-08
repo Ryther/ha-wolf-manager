@@ -62,6 +62,7 @@ enum Reply {
     WrongId,
     ExtraField,
     Oversized,
+    ExecDenied,
 }
 #[derive(Default)]
 struct Observations {
@@ -69,6 +70,8 @@ struct Observations {
     commands: Vec<Vec<u8>>,
     input: Vec<Vec<u8>>,
     pty: usize,
+    received_stdin: usize,
+    exec_accepted: bool,
 }
 struct FixtureHandler {
     seen: Arc<Mutex<Observations>>,
@@ -140,7 +143,13 @@ impl server::Handler for FixtureHandler {
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         self.seen.lock().unwrap().commands.push(command.to_vec());
-        session.channel_success(channel)?;
+        if matches!(self.reply, Reply::ExecDenied) {
+            session.channel_failure(channel)?;
+            session.close(channel)?;
+        } else {
+            session.channel_success(channel)?;
+            self.seen.lock().unwrap().exec_accepted = true;
+        }
         Ok(())
     }
     async fn data(
@@ -149,6 +158,12 @@ impl server::Handler for FixtureHandler {
         bytes: &[u8],
         _: &mut Session,
     ) -> Result<(), Self::Error> {
+        let mut seen = self.seen.lock().unwrap();
+        assert!(
+            seen.exec_accepted,
+            "typed stdin must wait for explicit exec acceptance"
+        );
+        seen.received_stdin += bytes.len();
         self.input.extend_from_slice(bytes);
         Ok(())
     }
@@ -336,4 +351,18 @@ fn malformed_existing_identity_is_preserved_and_refused() {
         fs::read(&key).unwrap(),
         b"damaged identity requiring operator recovery"
     );
+}
+
+#[tokio::test]
+async fn denied_exec_never_receives_typed_stdin_or_retries_command() {
+    let (root, pc) = fixture();
+    let public = PublicKey::from_openssh(&ensure_identity(root.path(), &pc).unwrap()).unwrap();
+    let server = server_fixture(pc.clone(), public, Reply::ExecDenied).await;
+    let mut ready = ssh::connect(&server.endpoint, root.path()).await.unwrap();
+    assert!(ready.execute(&status_request(pc)).await.is_err());
+    let seen = server.seen.lock().unwrap();
+    assert_eq!(seen.commands, vec![b"wolf-manager-rpc-v1".to_vec()]);
+    assert_eq!(seen.received_stdin, 0);
+    assert!(seen.input.is_empty());
+    assert!(!seen.exec_accepted);
 }

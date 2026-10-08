@@ -73,3 +73,19 @@ paths, terminal newlines in public-key files and repeated effective SSH
 `AcceptEnv` directives during installed-policy validation. The environment
 restriction still refuses any additional client variable or wildcard; repeated
 identical sentinel directives grant no extra authority.
+
+The follow-up snapshot on `9f8b568` passed 214 standard tests and the same
+13 selected opt-in cases. Rust LCOV increased to 9,797/12,768 lines (76.73%);
+manager coverage increased to 74.37% and coordinator coverage to 94.6%.
+Overall Sonar coverage increased to 69.7%, while new-code coverage was 94.7%.
+These measurements precede the subsequently discovered native OpenSSH and
+systemd catalog compatibility fixes. High line coverage does not prove that a
+faithful protocol fixture exercises every message ordering seen on a real host.
+
+The actual Debian VM demonstrated that OpenSSH sends a channel-window update
+before exec acceptance. RPC input must still wait for explicit exec success.
+The catalog sandbox also returned `ENOSYS` with `RestrictSUIDSGID=yes`:
+[systemd documents](https://github.com/systemd/systemd/blob/main/man/systemd.exec.xml)
+that this restriction blocks `openat2` entirely. The catalog unit explicitly
+disables that incompatible restriction while retaining its non-root UID,
+`NoNewPrivileges`, protected filesystem and guarded descriptor-based I/O.

@@ -15,7 +15,10 @@ ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=@CATALOG_STATE@
 PrivateTmp=yes
-RestrictSUIDSGID=yes
+# RestrictSUIDSGID blocks openat2 entirely, including read-only guarded scans.
+# Keep descriptor/path guards and the non-root, NoNewPrivileges sandbox.
+# https://github.com/systemd/systemd/blob/main/man/systemd.exec.xml
+RestrictSUIDSGID=no
 
 [Install]
 WantedBy=multi-user.target
