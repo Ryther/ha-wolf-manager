@@ -132,6 +132,54 @@ pub enum RpcResult {
     Logs { lines: Vec<String>, truncated: bool },
     RequestStatus(JournalObservation),
 }
+impl RpcResult {
+    pub(crate) fn validate_at_depth(&self, pc: &PcId, depth: usize) -> Result<(), SafeError> {
+        if depth > 8 {
+            return Err(SafeError::validation());
+        }
+        match self {
+            Self::Preflight(capabilities)
+                if capabilities.version != 1 || &capabilities.pc_id != pc =>
+            {
+                return Err(SafeError::validation());
+            }
+            Self::Logs { lines, .. }
+                if lines.len() > 500
+                    || lines.iter().any(|line| line.contains(['\0', '\r', '\n'])) =>
+            {
+                return Err(SafeError::validation());
+            }
+            Self::RequestStatus(journal) => {
+                if &journal.pc_id != pc {
+                    return Err(SafeError::validation());
+                }
+                journal.validate_at_depth(depth + 1)?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    /// Bind typed result content to the operation represented by durable child evidence.
+    pub fn validate_for_kind(&self, kind: OperationKind, pc: &PcId) -> Result<(), SafeError> {
+        self.validate_at_depth(pc, 0)?;
+        let compatible = matches!(
+            (kind, self),
+            (OperationKind::Preflight, Self::Preflight(_))
+                | (OperationKind::Status, Self::Status(_))
+                | (OperationKind::ApplySettings, Self::Applied { .. })
+                | (
+                    OperationKind::Start | OperationKind::Stop | OperationKind::Restart,
+                    Self::Lifecycle(_)
+                )
+                | (OperationKind::BoundedLogs, Self::Logs { .. })
+                | (OperationKind::RequestStatus, Self::RequestStatus(_))
+        );
+        if !compatible || canonical_json(self)?.len() > 1024 * 1024 {
+            return Err(SafeError::validation());
+        }
+        Ok(())
+    }
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RpcResponse {
@@ -145,6 +193,9 @@ pub struct RpcResponse {
 impl RpcResponse {
     pub fn validate_for(&self, request: &RpcRequest) -> Result<(), SafeError> {
         request.validate()?;
+        if let Some(result) = &self.result {
+            result.validate_at_depth(&request.pc_id, 0)?;
+        }
         if canonical_json(self)?.len() > 1024 * 1024 {
             return Err(SafeError::new("payload_too_large"));
         }

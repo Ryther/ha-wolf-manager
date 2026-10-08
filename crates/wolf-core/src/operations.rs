@@ -39,8 +39,7 @@ pub enum JournalPhase {
     Failed,
     UnknownInterrupted,
 }
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct JournalObservation {
     pub found: bool,
     pub request_id: Uuid,
@@ -50,6 +49,86 @@ pub struct JournalObservation {
     pub observed_at_ms: i64,
     pub result: Option<Box<RpcResult>>,
     pub error: Option<SafeError>,
+}
+impl JournalObservation {
+    /// Validate complete journal evidence; nonterminal states never carry final outcomes.
+    pub fn validate(&self) -> Result<(), SafeError> {
+        self.validate_at_depth(0)?;
+        if canonical_json(self)?.len() > 1024 * 1024 {
+            return Err(SafeError::new("payload_too_large"));
+        }
+        Ok(())
+    }
+    pub(crate) fn validate_at_depth(&self, depth: usize) -> Result<(), SafeError> {
+        if depth > 8 || self.request_id.is_nil() || self.observed_at_ms < 0 {
+            return Err(SafeError::validation());
+        }
+        if !self.found {
+            if self.canonical_request_sha256.is_some()
+                || self.phase.is_some()
+                || self.result.is_some()
+                || self.error.is_some()
+            {
+                return Err(SafeError::validation());
+            }
+            return Ok(());
+        }
+        if self.canonical_request_sha256.is_none() {
+            return Err(SafeError::validation());
+        }
+        match self.phase {
+            Some(JournalPhase::Succeeded) => {
+                let result = self.result.as_ref().ok_or_else(SafeError::validation)?;
+                if self.error.is_some() {
+                    return Err(SafeError::validation());
+                }
+                result.validate_at_depth(&self.pc_id, depth + 1)?;
+            }
+            Some(JournalPhase::Failed) => {
+                if self.result.is_some() || self.error.is_none() {
+                    return Err(SafeError::validation());
+                }
+            }
+            Some(
+                JournalPhase::Accepted | JournalPhase::Running | JournalPhase::UnknownInterrupted,
+            ) => {
+                if self.result.is_some() || self.error.is_some() {
+                    return Err(SafeError::validation());
+                }
+            }
+            None => return Err(SafeError::validation()),
+        }
+        Ok(())
+    }
+}
+impl<'de> Deserialize<'de> for JournalObservation {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Received {
+            found: bool,
+            request_id: Uuid,
+            pc_id: PcId,
+            canonical_request_sha256: Option<Revision>,
+            phase: Option<JournalPhase>,
+            observed_at_ms: i64,
+            result: Option<Box<RpcResult>>,
+            error: Option<SafeError>,
+        }
+        let raw = Received::deserialize(d)?;
+        let journal = Self {
+            found: raw.found,
+            request_id: raw.request_id,
+            pc_id: raw.pc_id,
+            canonical_request_sha256: raw.canonical_request_sha256,
+            phase: raw.phase,
+            observed_at_ms: raw.observed_at_ms,
+            result: raw.result,
+            error: raw.error,
+        };
+        journal.validate().map_err(serde::de::Error::custom)?;
+        Ok(journal)
+    }
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -124,7 +203,8 @@ pub fn reconcile_children(
             return unknown();
         }
         let o = matching[0];
-        if !o.found
+        if o.validate().is_err()
+            || !o.found
             || o.pc_id != child.pc_id
             || o.canonical_request_sha256.as_ref() != Some(&child.canonical_request_sha256)
         {
@@ -132,6 +212,11 @@ pub fn reconcile_children(
         }
         match o.phase {
             Some(JournalPhase::Succeeded) => {
+                if o.result.as_ref().is_none_or(|result| {
+                    result.validate_for_kind(child.kind, &child.pc_id).is_err()
+                }) {
+                    return unknown();
+                }
                 if child.kind == OperationKind::ApplySettings {
                     stage_succeeded = true;
                 }

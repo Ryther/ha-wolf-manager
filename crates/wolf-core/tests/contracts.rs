@@ -100,7 +100,26 @@ fn success(child: &ChildRequest) -> JournalObservation {
         canonical_request_sha256: Some(child.canonical_request_sha256.clone()),
         phase: Some(JournalPhase::Succeeded),
         observed_at_ms: 1,
-        result: None,
+        result: Some(Box::new(match child.kind {
+            OperationKind::ApplySettings => RpcResult::Applied {
+                staged_revision: Revision::new("0".repeat(64)).unwrap(),
+            },
+            OperationKind::Start | OperationKind::Stop | OperationKind::Restart => {
+                RpcResult::Lifecycle(HostStatus {
+                    systemd_state: "inactive".into(),
+                    container_state: "exited".into(),
+                    restart_count: 0,
+                    exit_code: Some(0),
+                    staged_revision: None,
+                    running_revision: None,
+                    recovery_pending: false,
+                })
+            }
+            _ => RpcResult::Logs {
+                lines: vec![],
+                truncated: false,
+            },
+        })),
         error: None,
     }
 }
@@ -464,4 +483,174 @@ fn explicit_legacy_import_preserves_long_valid_definitions_and_assignments() {
     );
     assert!(settings.validate().is_ok());
     assert!(settings.revision().is_ok());
+}
+#[test]
+fn contradictory_terminal_content_never_clears_uncertainty() {
+    let stop = child(0, OperationKind::Stop, DispatchPhase::Sent);
+    let mut journal = success(&stop);
+    journal.error = Some(SafeError::validation());
+    assert_eq!(
+        reconcile_children(std::slice::from_ref(&stop), &[journal]).state,
+        OperationState::UnknownInterrupted
+    );
+    let mut journal = success(&stop);
+    journal.phase = Some(JournalPhase::Failed);
+    assert_eq!(
+        reconcile_children(std::slice::from_ref(&stop), &[journal]).state,
+        OperationState::UnknownInterrupted
+    );
+    let mut journal = success(&stop);
+    journal.result = Some(Box::new(RpcResult::Applied {
+        staged_revision: Revision::new("0".repeat(64)).unwrap(),
+    }));
+    assert_eq!(
+        reconcile_children(std::slice::from_ref(&stop), &[journal]).state,
+        OperationState::UnknownInterrupted
+    );
+}
+#[test]
+fn journal_decode_refuses_missing_and_contradictory_terminal_content() {
+    let stop = child(0, OperationKind::Stop, DispatchPhase::Sent);
+    let mut journal = success(&stop);
+    journal.result = None;
+    assert!(
+        serde_json::from_value::<JournalObservation>(serde_json::to_value(&journal).unwrap())
+            .is_err()
+    );
+    journal.found = false;
+    assert!(
+        serde_json::from_value::<JournalObservation>(serde_json::to_value(&journal).unwrap())
+            .is_err()
+    );
+}
+#[test]
+fn nested_request_status_rejects_contradictory_or_incomplete_journal() {
+    let stop = child(0, OperationKind::Stop, DispatchPhase::Sent);
+    let req = request(RpcOperation::RequestStatus(RequestStatusPayload {
+        original_request_id: stop.request_id,
+    }));
+    let mut journal = success(&stop);
+    journal.error = Some(SafeError::validation());
+    assert!(
+        response(&req, RpcResult::RequestStatus(journal))
+            .validate_for(&req)
+            .is_err()
+    );
+    let mut journal = success(&stop);
+    journal.phase = Some(JournalPhase::Running);
+    journal.result = Some(Box::new(RpcResult::Applied {
+        staged_revision: Revision::new("0".repeat(64)).unwrap(),
+    }));
+    assert!(
+        response(&req, RpcResult::RequestStatus(journal))
+            .validate_for(&req)
+            .is_err()
+    );
+}
+#[test]
+fn complete_success_and_failure_journals_decode_and_reconcile() {
+    let stop = child(0, OperationKind::Stop, DispatchPhase::Sent);
+    let journal = success(&stop);
+    let decoded: JournalObservation =
+        serde_json::from_value(serde_json::to_value(&journal).unwrap()).unwrap();
+    assert_eq!(
+        reconcile_children(std::slice::from_ref(&stop), &[decoded]).state,
+        OperationState::Succeeded
+    );
+    let mut failed = journal;
+    failed.phase = Some(JournalPhase::Failed);
+    failed.result = None;
+    failed.error = Some(SafeError::validation());
+    let decoded: JournalObservation =
+        serde_json::from_value(serde_json::to_value(&failed).unwrap()).unwrap();
+    assert_eq!(
+        reconcile_children(std::slice::from_ref(&stop), &[decoded]).state,
+        OperationState::Failed
+    );
+}
+#[test]
+fn nonterminal_and_not_found_journals_are_valid_but_never_terminal_evidence() {
+    let stop = child(0, OperationKind::Stop, DispatchPhase::Sent);
+    for phase in [
+        JournalPhase::Accepted,
+        JournalPhase::Running,
+        JournalPhase::UnknownInterrupted,
+    ] {
+        let mut journal = success(&stop);
+        journal.phase = Some(phase);
+        journal.result = None;
+        assert!(journal.validate().is_ok());
+        assert_eq!(
+            reconcile_children(std::slice::from_ref(&stop), std::slice::from_ref(&journal)).state,
+            OperationState::UnknownInterrupted
+        );
+        let req = request(RpcOperation::RequestStatus(RequestStatusPayload {
+            original_request_id: stop.request_id,
+        }));
+        assert!(
+            response(&req, RpcResult::RequestStatus(journal))
+                .validate_for(&req)
+                .is_ok()
+        );
+    }
+    let mut missing = success(&stop);
+    missing.found = false;
+    missing.canonical_request_sha256 = None;
+    missing.phase = None;
+    missing.result = None;
+    assert!(missing.validate().is_ok());
+    assert_eq!(
+        reconcile_children(&[stop], &[missing]).state,
+        OperationState::UnknownInterrupted
+    );
+}
+#[test]
+fn journal_consistency_matrix_rejects_invalid_fields() {
+    let stop = child(0, OperationKind::Stop, DispatchPhase::Sent);
+    let valid = success(&stop);
+    let mut invalid = Vec::new();
+    let mut entry = valid.clone();
+    entry.canonical_request_sha256 = None;
+    invalid.push(entry);
+    let mut entry = valid.clone();
+    entry.phase = None;
+    invalid.push(entry);
+    let mut entry = valid.clone();
+    entry.observed_at_ms = -1;
+    invalid.push(entry);
+    let mut entry = valid.clone();
+    entry.request_id = uuid::Uuid::nil();
+    invalid.push(entry);
+    let mut entry = valid.clone();
+    entry.found = false;
+    invalid.push(entry);
+    let mut entry = valid.clone();
+    entry.phase = Some(JournalPhase::Failed);
+    entry.error = Some(SafeError::validation());
+    invalid.push(entry);
+    for phase in [
+        JournalPhase::Accepted,
+        JournalPhase::Running,
+        JournalPhase::UnknownInterrupted,
+    ] {
+        let mut entry = valid.clone();
+        entry.phase = Some(phase);
+        invalid.push(entry);
+        let mut entry = valid.clone();
+        entry.phase = Some(phase);
+        entry.result = None;
+        entry.error = Some(SafeError::validation());
+        invalid.push(entry);
+    }
+    for entry in invalid {
+        assert!(entry.validate().is_err());
+        assert!(
+            serde_json::from_value::<JournalObservation>(serde_json::to_value(&entry).unwrap())
+                .is_err()
+        );
+        assert_eq!(
+            reconcile_children(std::slice::from_ref(&stop), &[entry]).state,
+            OperationState::UnknownInterrupted
+        );
+    }
 }
