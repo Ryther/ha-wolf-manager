@@ -62,6 +62,46 @@ Stop only the development services with
 `docker compose -f .devcontainer/compose.yaml down`. Named build caches survive;
 there is no product database or persistent broker state in this setup.
 
+## Local acceptance sequence
+
+Start with the isolated environment above. After `post-create.sh`, run the full
+workspace suite as well as the selected integration checks in `verify.sh`:
+
+```sh
+docker compose -f .devcontainer/compose.yaml exec devcontainer cargo test --locked --workspace
+docker compose -f .devcontainer/compose.yaml exec devcontainer sh .devcontainer/verify.sh
+```
+
+The workspace tests include authentication, persistence, native HTTPS, guarded
+host transformations and interrupted-operation recovery. The verification script
+also exercises the private MQTT broker, native SSH fixtures and browser contract.
+Browser fixture tests alone do not prove the complete native backend.
+Ignored root fixtures must run only in their documented disposable containers;
+do not run every ignored test against the workstation.
+
+Next, test the actual `scratch` image using a new standalone deployment directory
+and synthetic secrets, following the [standalone guide](../guides/standalone.md).
+Use your locally built image tag in `WOLF_MANAGER_IMAGE`, a localhost HTTPS origin
+with its exact port, and a distinct loopback port to avoid existing services.
+Keep the test database and keys separate from production. Verify the native
+healthcheck, administrator bootstrap, sign-out/sign-in, PC creation and ordered
+parameter saves. An SSH hostname used only for these UI checks can be a reserved
+`example.test` name; it does not provide a reachable host.
+
+For the complete control path, use a separate disposable Linux VM with systemd,
+Docker and temporary Steam/Wolf data. Follow the
+[host installation guide](../guides/host-installation.md), review the preview,
+apply restricted SSH authority and verify the host fingerprint independently.
+Connect the manager to this fixture PC and exercise status, start, stop, restart,
+settings staging, catalog discovery and retained backup/restore behavior.
+Connect a separate Home Assistant fixture and confirm MQTT entities and ON/OFF
+automations. Do not adopt the household PC or reuse its data for this exercise.
+
+Finally, actual Moonlight video/audio, input and GPU encoding require a dedicated
+hardware test or an explicitly prepared GPU passthrough VM. Distribution
+containers and a healthy dashboard do not establish streaming compatibility.
+Supervisor Ingress requires the separate Home Assistant environment below.
+
 ## Optional Home Assistant fixture
 
 Home Assistant is optional and is not automatically launched or configured.

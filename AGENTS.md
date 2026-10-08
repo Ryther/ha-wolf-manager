@@ -166,6 +166,12 @@ facts into public docs; keep execution history and intermediate evidence private
 
 Review `git status --short --untracked-files=all`, `git diff --check` and the staged
 diff before committing. Do not bypass ignore rules to add private work or secrets.
+The root `.gitignore` denies every file and directory by default. Allowlist only
+exact reviewed public file paths and the parent directories needed to reach them.
+When adding a public file, add its exact entry in the same change. Do not admit
+whole source directories with recursive patterns or use `git add -f`. Keep local
+state, credentials, planning and generated artifacts excluded. Verify new files
+and representative private paths with `git check-ignore --no-index`.
 Use atomic Conventional Commits and validate messages with repository Commitizen.
 Commit, push and publish only within user authorization; a local commit is not
 permission to release. Do not rewrite pushed history without explicit approval.
