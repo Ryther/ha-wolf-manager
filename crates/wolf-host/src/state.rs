@@ -139,8 +139,11 @@ impl State {
     }
     pub fn stage(&self, settings: &Settings) -> io::Result<Revision> {
         let _lock = self.lock()?;
-        let revision = settings.revision().map_err(|_| invalid())?;
         self.staged()?;
+        self.stage_locked(settings)
+    }
+    fn stage_locked(&self, settings: &Settings) -> io::Result<Revision> {
+        let revision = settings.revision().map_err(|_| invalid())?;
         let record = Staged {
             version: 1,
             pc_id: self.pc.clone(),
@@ -149,6 +152,15 @@ impl State {
         };
         self.write("staged.json", &serde_json::to_vec(&record)?)?;
         Ok(revision)
+    }
+    /// First boot creates defaults under the same lock as remote staging.
+    pub fn staged_or_default(&self, defaults: &Settings) -> io::Result<(Settings, Revision)> {
+        let _lock = self.lock()?;
+        if let Some(staged) = self.staged()? {
+            return Ok(staged);
+        }
+        let revision = self.stage_locked(defaults)?;
+        Ok((defaults.clone(), revision))
     }
     pub fn staged(&self) -> io::Result<Option<(Settings, Revision)>> {
         let Some(bytes) = self.read("staged.json")? else {
