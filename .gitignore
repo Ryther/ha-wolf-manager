@@ -162,6 +162,11 @@
 !/crates/wolf-manager/src/store.rs
 !/crates/wolf-manager/tests/body_deadline.rs
 !/crates/wolf-manager/tests/bundle.rs
+!/crates/wolf-manager/tests/candidate/
+!/crates/wolf-manager/tests/candidate/docker.rs
+!/crates/wolf-manager/tests/candidate/http.rs
+!/crates/wolf-manager/tests/candidate/mqtt.rs
+!/crates/wolf-manager/tests/candidate/ssh.rs
 !/crates/wolf-manager/tests/coordinator.rs
 !/crates/wolf-manager/tests/fixtures/README.md
 !/crates/wolf-manager/tests/fixtures/tls-cert.pem
@@ -173,6 +178,7 @@
 !/crates/wolf-manager/tests/mqtt.rs
 !/crates/wolf-manager/tests/native-init.sh
 !/crates/wolf-manager/tests/runtime.rs
+!/crates/wolf-manager/tests/runtime_candidate.rs
 !/crates/wolf-manager/tests/ssh.rs
 !/crates/wolf-manager/tests/state_auth.rs
 !/docs/contracts/api-contract.md

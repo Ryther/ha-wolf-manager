@@ -103,6 +103,18 @@ startup, actual security scans or live GitHub/GHCR publication.
 pinned musl builder. `native-build.sh` validates ELF linkage and versions and
 packages prebuilt bytes through the root `FROM scratch` Dockerfile. Buildx
 exports OCI and a local smoke-test image from the same build operation.
+Before uploading either native platform, the pinned GNU Rust test driver
+executes that exact loaded image ID without emulation. The opt-in
+`runtime_candidate` fixture verifies trusted HTTPS, session/CSRF enforcement,
+pinned-key native SSH with the fixed RPC command, MQTT5 over a private TLS CA,
+UID/GID 1000 protected writable state, native exec health, admitted-operation
+and MQTT acknowledgement draining on SIGTERM, and retained identity/session
+state after restart. Its broker and data are freshly created disposable
+fixtures. It does not exercise Supervisor root startup or GPU streaming.
+
+Workspace LLVM coverage and the Steam process quiescence suite run with the
+runner's numeric UID/GID in a separate Docker PID namespace. This isolates
+unrelated runner processes without weakening the production refusal policy.
 `producer.py assemble` creates reproducible host/installer archives and merges
 platform manifests without changing their bytes. `check_subject.py` seals and
 verifies the full subject file map, host ELFs, archive checksums and OCI graph.
@@ -115,7 +127,12 @@ MQTT broker fixtures, lifecycle, Chromium UI fixtures, seven disposable Linux
 container families, add-on schema, Cargo audit, Gitleaks, CodeQL and per-platform
 Trivy scans. CodeQL supports Rust with `build-mode: none`, and also analyzes
 JavaScript/TypeScript, Python and Actions. The SARIF gate refuses high/critical
-security findings. Trivy's scratch-image scan complements Cargo.lock auditing;
+security findings, resolving rule metadata in both the driver and extension
+components. CodeQL excludes only the canonical upstream
+`vendor/rumqttc/examples/tls.rs` demonstration, which contains illustrative
+credentials and is not compiled into the product. Vendored library sources and
+owned tests remain scanned; owned authentication fixtures generate credentials
+at runtime. Trivy's scratch-image scan complements Cargo.lock auditing;
 it does not substitute for dependency analysis of statically compiled Rust.
 
 The add-on schema is the pinned community app schema, with its upstream license

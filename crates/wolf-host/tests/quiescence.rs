@@ -16,6 +16,7 @@ impl WriterChild {
         let child = self.0.as_mut().unwrap();
         child.kill().unwrap();
         child.wait().unwrap();
+        assert!(child.try_wait().unwrap().is_some(), "writer must be reaped");
         self.0 = None;
     }
 }
@@ -72,6 +73,63 @@ fn native_process_fixture() {
     std::thread::sleep(Duration::from_secs(30));
 }
 
+// Diagnostics are aggregate controlled counts, emitted only after a failed
+// proof. Never print process names, executable paths, arguments or raw errors.
+fn assert_stopped(uid: u32, executables: &[PathBuf]) {
+    let result = quiescence::require_stopped(uid, executables);
+    if result.is_err() {
+        let mut same_uid = 0;
+        let mut owner_errors = 0;
+        let mut exe_missing = 0;
+        let mut exe_denied = 0;
+        let mut exe_other = 0;
+        let mut comm_errors = 0;
+        let mut zombies = 0;
+        if let Ok(entries) = std::fs::read_dir("/proc") {
+            for entry in entries.flatten() {
+                if entry.file_name().to_string_lossy().parse::<u32>().is_err() {
+                    continue;
+                }
+                let directory = entry.path();
+                let metadata = match std::fs::metadata(&directory) {
+                    Ok(metadata) => metadata,
+                    Err(_) => {
+                        owner_errors += 1;
+                        continue;
+                    }
+                };
+                use std::os::unix::fs::MetadataExt;
+                if metadata.uid() != uid {
+                    continue;
+                }
+                same_uid += 1;
+                if let Err(error) = std::fs::metadata(directory.join("exe")) {
+                    match error.kind() {
+                        std::io::ErrorKind::NotFound => exe_missing += 1,
+                        std::io::ErrorKind::PermissionDenied => exe_denied += 1,
+                        _ => exe_other += 1,
+                    }
+                }
+                if std::fs::read(directory.join("comm")).is_err() {
+                    comm_errors += 1;
+                }
+                if std::fs::read_to_string(directory.join("status"))
+                    .is_ok_and(|status| status.lines().any(|line| line.starts_with("State:\tZ")))
+                {
+                    zombies += 1;
+                }
+            }
+        }
+        eprintln!(
+            "quiescence fixture refusal counts: same_uid={same_uid} owner_errors={owner_errors} exe_missing={exe_missing} exe_denied={exe_denied} exe_other={exe_other} comm_errors={comm_errors} zombies={zombies}"
+        );
+    }
+    assert!(
+        result.is_ok(),
+        "reaped native writer must permit stopped proof"
+    );
+}
+
 #[test]
 fn executable_identity_detects_running_writer_and_permits_after_exit() {
     let _guard = PROCESS_FIXTURES.lock().unwrap();
@@ -83,7 +141,7 @@ fn executable_identity_detects_running_writer_and_permits_after_exit() {
     child.stop();
     assert!(alive, "native writer fixture must remain running");
     assert!(running.is_err());
-    quiescence::require_stopped(uid, &executables).unwrap();
+    assert_stopped(uid, &executables);
 }
 
 #[test]
@@ -117,6 +175,6 @@ fn undeclared_native_steam_name_refuses_until_process_exits() {
             running.is_err(),
             "an undeclared native Steam writer must refuse"
         );
-        quiescence::require_stopped(uid, &executables).unwrap();
+        assert_stopped(uid, &executables);
     }
 }

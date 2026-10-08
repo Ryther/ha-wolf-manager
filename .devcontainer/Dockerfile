@@ -9,7 +9,7 @@ ENV PATH=/usr/local/cargo/bin:$PATH
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential pkg-config libssl-dev python3 python3-venv git openssh-client ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
-    && rustup component add clippy rustfmt \
+    && rustup component add clippy rustfmt llvm-tools-preview \
     && if getent passwd 1000 >/dev/null; then \
          account="$(getent passwd 1000 | cut -d: -f1)"; \
          usermod -l vscode -d /home/vscode -m "$account"; \

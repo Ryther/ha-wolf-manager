@@ -5,3 +5,6 @@ paths-ignore:
   - _tmp
   - target
   - node_modules
+  # Canonical upstream demonstration credentials, never compiled into our services.
+  # Keep vendored library sources and all owned tests in the analysis scope.
+  - vendor/rumqttc/examples/tls.rs

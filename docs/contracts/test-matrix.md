@@ -59,9 +59,11 @@ The real HA device page observed the Wolf switch ON and both game sensors.
 
 The documented screenshots are actual browser captures, not intercepted API
 fixtures. The manifest entries do not establish that games were installed or
-played. GPU encoding, Moonlight streaming and native ARM execution remain
-untested. Other distribution evidence remains container-only as listed in the
-README.
+played. GPU encoding, Moonlight streaming and the complete ARM host-to-manager
+installation remain untested. Native ARM scratch startup has passed on GitHub;
+the expanded per-platform TLS/SSH/MQTT/state/shutdown fixture must also pass in
+the exact release candidate run. Other distribution evidence remains
+container-only as listed in the README.
 
 Manager updates retained the same Supervisor `/data` mapping, byte-verified cold
 backups and previous images. Native host upgrades retained reviewed installer

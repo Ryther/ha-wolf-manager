@@ -41,8 +41,11 @@ fn ingress_checks_transport_peer_and_refuses_origin_paths() {
         "https://example.test"
     );
 }
-fn secret(path: &std::path::Path) -> BootstrapSecret {
-    fs::write(path, b"synthetic-bootstrap-token-256bits!").unwrap();
+fn fixture_credential() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+fn secret(path: &std::path::Path, token: &str) -> BootstrapSecret {
+    fs::write(path, token.as_bytes()).unwrap();
     fs::set_permissions(path, fs::Permissions::from_mode(0o400)).unwrap();
     BootstrapSecret::read(path).unwrap()
 }
@@ -57,38 +60,32 @@ fn attempt<'a>(challenge: &'a Challenge, password: &'a str) -> LoginAttempt<'a> 
 }
 #[test]
 fn bootstrap_consumes_challenge_and_requires_session_bound_csrf() {
+    let password = fixture_credential();
+    let bootstrap_token = fixture_credential();
     let temp = tempdir().unwrap();
     let mut store = Store::open(&temp.path().join("data"), 0).unwrap();
     let mut auth = AuthService::standalone(
         &mut store,
         "https://example.test",
-        secret(&temp.path().join("secret")),
+        secret(&temp.path().join("secret"), &bootstrap_token),
     )
     .unwrap();
     let challenge = auth
         .issue_challenge("192.0.2.9".parse().unwrap(), Purpose::Bootstrap, 1)
         .unwrap();
     assert!(
-        auth.bootstrap(attempt(&challenge, "SyntheticPassword!42"), "wrong", 2)
+        auth.bootstrap(attempt(&challenge, &password), "wrong", 2)
             .is_err()
     );
     let challenge = auth
         .issue_challenge("192.0.2.9".parse().unwrap(), Purpose::Bootstrap, 3)
         .unwrap();
     let credentials = auth
-        .bootstrap(
-            attempt(&challenge, "SyntheticPassword!42"),
-            "synthetic-bootstrap-token-256bits!",
-            4,
-        )
+        .bootstrap(attempt(&challenge, &password), &bootstrap_token, 4)
         .unwrap();
     assert!(
-        auth.bootstrap(
-            attempt(&challenge, "SyntheticPassword!42"),
-            "synthetic-bootstrap-token-256bits!",
-            5
-        )
-        .is_err()
+        auth.bootstrap(attempt(&challenge, &password), &bootstrap_token, 5)
+            .is_err()
     );
     assert!(
         auth.require_mutation(
@@ -331,6 +328,7 @@ fn schema_version_checksum_corruption_refuses_without_byte_changes() {
 }
 #[test]
 fn offline_reset_is_exclusive_and_preserves_domain_rows() {
+    let password = fixture_credential();
     let temp = tempdir().unwrap();
     let root = temp.path().join("data");
     let mut store = Store::open(&root, 0).unwrap();
@@ -338,26 +336,21 @@ fn offline_reset_is_exclusive_and_preserves_domain_rows() {
     assert!(ha_wolf_manager::recovery::Recovery::open(&root, 2).is_err());
     drop(store);
     let mut recovery = ha_wolf_manager::recovery::Recovery::open(&root, 3).unwrap();
-    recovery
-        .reset_password("SyntheticNewPassword!42", 4)
-        .unwrap();
+    recovery.reset_password(&password, 4).unwrap();
     drop(recovery);
     let mut store = Store::open(&root, 5).unwrap();
     assert_eq!(store.pcs().unwrap().len(), 1);
     let mut auth = AuthService::standalone(
         &mut store,
         "https://example.test",
-        secret(&temp.path().join("secret")),
+        secret(&temp.path().join("secret"), &fixture_credential()),
     )
     .unwrap();
     assert!(auth.initialized().unwrap());
     let challenge = auth
         .issue_challenge("192.0.2.9".parse().unwrap(), Purpose::Login, 6)
         .unwrap();
-    assert!(
-        auth.login(attempt(&challenge, "SyntheticNewPassword!42"), 7)
-            .is_ok()
-    );
+    assert!(auth.login(attempt(&challenge, &password), 7).is_ok());
 }
 #[test]
 fn trusted_proxy_and_ingress_prefix_refuse_spoofed_transport_input() {
@@ -381,31 +374,29 @@ fn trusted_proxy_and_ingress_prefix_refuse_spoofed_transport_input() {
 }
 #[test]
 fn login_challenge_replay_peer_binding_logout_and_rate_limit() {
+    let password = fixture_credential();
+    let incorrect_password = fixture_credential();
+    assert_ne!(password, incorrect_password);
     let temp = tempdir().unwrap();
     let root = temp.path().join("data");
     let mut recovery = ha_wolf_manager::recovery::Recovery::open(&root, 0).unwrap();
-    recovery.reset_password("SyntheticPassword!42", 1).unwrap();
+    recovery.reset_password(&password, 1).unwrap();
     drop(recovery);
     let mut store = Store::open(&root, 2).unwrap();
     let mut auth = AuthService::standalone(
         &mut store,
         "https://example.test",
-        secret(&temp.path().join("secret")),
+        secret(&temp.path().join("secret"), &fixture_credential()),
     )
     .unwrap();
     let challenge = auth
         .issue_challenge("192.0.2.9".parse().unwrap(), Purpose::Login, 3)
         .unwrap();
-    let mut wrong = attempt(&challenge, "SyntheticPassword!42");
+    let mut wrong = attempt(&challenge, &password);
     wrong.peer = "192.0.2.10".parse().unwrap();
     assert!(auth.login(wrong, 4).is_err());
-    let credentials = auth
-        .login(attempt(&challenge, "SyntheticPassword!42"), 5)
-        .unwrap();
-    assert!(
-        auth.login(attempt(&challenge, "SyntheticPassword!42"), 6)
-            .is_err()
-    );
+    let credentials = auth.login(attempt(&challenge, &password), 5).unwrap();
+    assert!(auth.login(attempt(&challenge, &password), 6).is_err());
     assert!(
         credentials
             .cookie()
@@ -424,7 +415,7 @@ fn login_challenge_replay_peer_binding_logout_and_rate_limit() {
             .issue_challenge("192.0.2.9".parse().unwrap(), Purpose::Login, 10 + i)
             .unwrap();
         assert_eq!(
-            auth.login(attempt(&challenge, "WrongPassword!42"), 10 + i)
+            auth.login(attempt(&challenge, &incorrect_password), 10 + i)
                 .err()
                 .unwrap()
                 .code(),
@@ -435,7 +426,7 @@ fn login_challenge_replay_peer_binding_logout_and_rate_limit() {
         .issue_challenge("192.0.2.9".parse().unwrap(), Purpose::Login, 20)
         .unwrap();
     assert_eq!(
-        auth.login(attempt(&challenge, "SyntheticPassword!42"), 21)
+        auth.login(attempt(&challenge, &password), 21)
             .err()
             .unwrap()
             .code(),
@@ -444,13 +435,14 @@ fn login_challenge_replay_peer_binding_logout_and_rate_limit() {
 }
 #[test]
 fn initialized_marker_blocks_missing_or_prebootstrap_database() {
+    let password = fixture_credential();
     let temp = tempdir().unwrap();
     let root = temp.path().join("data");
     let store = Store::open(&root, 0).unwrap();
     drop(store);
     let prebootstrap = fs::read(root.join("manager.sqlite3")).unwrap();
     let mut recovery = ha_wolf_manager::recovery::Recovery::open(&root, 1).unwrap();
-    recovery.reset_password("SyntheticPassword!42", 2).unwrap();
+    recovery.reset_password(&password, 2).unwrap();
     drop(recovery);
     fs::write(root.join("manager.sqlite3"), &prebootstrap).unwrap();
     assert!(Store::open(&root, 3).is_err());

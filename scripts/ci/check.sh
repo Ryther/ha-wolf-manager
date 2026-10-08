@@ -4,17 +4,36 @@ set -eu
 check=${1:?required canonical check name}
 mkdir -p _tmp/evidence
 python -m scripts.ci.check_subject --bundle _tmp/subject --sha "$CANDIDATE_SHA" > "_tmp/evidence/$check-subject.json"
+# The runner account can own unrelated processes whose executable identity is
+# inaccessible. Native process fixtures need their own PID namespace, preserving
+# the runner UID/GID and absolute source/cache/profile paths used by coverage.
+host_cargo_home=${CARGO_HOME:-$HOME/.cargo}
+build_gnu_fixture() {
+  docker build -f .devcontainer/Dockerfile -t wolf-coverage-fixture .
+}
+isolated_cargo() {
+  docker run --rm --user "$(id -u):$(id -g)" \
+    --mount "type=bind,source=$PWD,target=$PWD" \
+    --mount "type=bind,source=$host_cargo_home,target=$host_cargo_home" \
+    --workdir "$PWD" -e CARGO_HOME="$host_cargo_home" \
+    -e CARGO_TARGET_DIR="$PWD/target" \
+    -e CARGO_LLVM_COV_TARGET_DIR="$PWD/target/llvm-cov-target" \
+    -e PATH="/usr/local/cargo/bin:$host_cargo_home/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+    wolf-coverage-fixture "$@"
+}
 case "$check" in
   rust)
     cargo fmt --all -- --check
     cargo clippy --locked --workspace --all-targets -- -D warnings
     cargo install cargo-llvm-cov --version 0.9.1 --locked
-    cargo llvm-cov --locked --workspace --no-report
+    build_gnu_fixture
+    isolated_cargo cargo llvm-cov --locked --workspace --no-report
     # Root fixtures run only in a dedicated container, never on the runner host.
-    docker build -f .devcontainer/Dockerfile -t wolf-coverage-fixture .
     docker run --rm --user 0 --mount "type=bind,source=$PWD,target=$PWD" \
-      --mount "type=bind,source=$HOME/.cargo,target=/home/vscode/.cargo" \
-      --workdir "$PWD" -e CARGO_TARGET_DIR="$PWD/target" \
+      --mount "type=bind,source=$host_cargo_home,target=$host_cargo_home" \
+      --workdir "$PWD" -e CARGO_HOME="$host_cargo_home" \
+      -e PATH="/usr/local/cargo/bin:$host_cargo_home/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+      -e CARGO_TARGET_DIR="$PWD/target" \
       -e CARGO_LLVM_COV_TARGET_DIR="$PWD/target/llvm-cov-target" \
       wolf-coverage-fixture sh -eu -c '
         apt-get update
@@ -22,11 +41,10 @@ case "$check" in
         mkdir -p /run/sshd
         ssh-keygen -A
         printf disposable-container > /run/wolf-native-validator-fixture
-        rustup component add llvm-tools-preview
         WOLF_TEST_NATIVE_VALIDATORS=1 cargo llvm-cov --locked --no-report -p wolf-manager-host --lib -- --ignored --test-threads=1
         cargo llvm-cov --locked --no-report -p wolf-manager-host --test host_steam -- --ignored --exact policy_adapter_overlays_userdata_and_library_aliases_then_restores_pairing_safely
         cargo llvm-cov --locked --no-report -p ha-wolf-manager --test ha_bootstrap -- --ignored --exact native_supervisor_get_only_bearer_bounded_response_and_failure
-        chown -R "$(stat -c %u .):$(stat -c %g .)" target /home/vscode/.cargo
+        chown -R "$(stat -c %u .):$(stat -c %g .)" target "$CARGO_HOME"
       '
     printf 'listener 18889\nallow_anonymous true\npersistence false\n' > _tmp/coverage-mqtt.conf
     docker run -d --name ci-coverage-mqtt --network host --mount "type=bind,source=$PWD/_tmp/coverage-mqtt.conf,target=/mosquitto/config/mosquitto.conf,readonly" eclipse-mosquitto:2.1.2-alpine@sha256:38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408
@@ -56,7 +74,12 @@ PYREADY
     ;;
   auth-ingress) cargo test --locked -p ha-wolf-manager --test state_auth --test http --test ha_bootstrap --test runtime ;;
   ssh-policy) cargo test --locked -p ha-wolf-manager --test ssh; cargo test --locked -p wolf-manager-host --test policy --test dispatcher ;;
-  persistence) cargo test --locked -p ha-wolf-manager --test bundle; cargo test --locked -p wolf-manager-host --test state --test transactions --test quiescence ;;
+  persistence)
+    cargo test --locked -p ha-wolf-manager --test bundle
+    cargo test --locked -p wolf-manager-host --test state --test transactions
+    build_gnu_fixture
+    isolated_cargo cargo test --locked -p wolf-manager-host --test quiescence
+    ;;
   lifecycle) cargo test --locked -p ha-wolf-manager --test coordinator; cargo test --locked -p wolf-manager-host --test lifecycle --test hooks --test generated_apps --test journal --test rpc ;;
   mqtt)
     printf 'listener 1883\nallow_anonymous true\npersistence false\n' > _tmp/mqtt.conf
