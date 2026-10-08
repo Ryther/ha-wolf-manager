@@ -111,6 +111,14 @@
     "mkdocs-material": {
       "version": "9.7.7",
       "source": "https://pypi.org/project/mkdocs-material/"
+    },
+    "coverage": {
+      "version": "7.16.2",
+      "source": "https://pypi.org/project/coverage/"
+    },
+    "v8-to-istanbul": {
+      "version": "9.3.0",
+      "source": "https://github.com/istanbuljs/v8-to-istanbul/releases"
     }
   },
   "constraints": [

@@ -19,6 +19,11 @@ REPOSITORY = 'Ryther/ha-wolf-manager'
 IMAGE = 'ghcr.io/ryther/ha-wolf-manager'
 
 
+OCI_BLOB_PREFIX = 'oci/blobs/sha256/'
+ARCHIVE_SUFFIX = '.tar.gz'
+IMAGE_FILE = 'image.json'
+
+
 def encoded(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':')).encode()
 
@@ -61,15 +66,15 @@ def merge_oci(inputs, version):
         descriptor = descriptors[0]
         # Buildx exports either a direct manifest or a single-platform index.
         if descriptor.get('mediaType') == v.INDEX_TYPE:
-            child = v.json_bytes(files['oci/blobs/sha256/' + v.parse_digest(descriptor.get('digest'))])
+            child = v.json_bytes(files[OCI_BLOB_PREFIX + v.parse_digest(descriptor.get('digest'))])
             v.require(len(child.get('manifests', [])) == 1, 'producer_attestation_or_extra_platform')
             descriptor = child['manifests'][0]
         v.require(descriptor.get('mediaType') == v.MANIFEST_TYPE, 'producer_manifest_type')
-        raw = files.get('oci/blobs/sha256/' + v.parse_digest(descriptor.get('digest')))
+        raw = files.get(OCI_BLOB_PREFIX + v.parse_digest(descriptor.get('digest')))
         v.require(raw is not None and len(raw) == descriptor.get('size'), 'producer_manifest_digest')
         manifest = v.json_bytes(raw)
         config_descriptor = manifest.get('config', {})
-        config = v.json_bytes(files['oci/blobs/sha256/' + v.parse_digest(config_descriptor.get('digest'))])
+        config = v.json_bytes(files[OCI_BLOB_PREFIX + v.parse_digest(config_descriptor.get('digest'))])
         architecture = config.get('architecture')
         v.require(config.get('os') == 'linux' and architecture in ('amd64', 'arm64')
                   and architecture not in platforms, 'producer_platform')
@@ -79,7 +84,7 @@ def merge_oci(inputs, version):
     index = encoded({'schemaVersion': 2, 'mediaType': v.INDEX_TYPE,
                      'manifests': [platforms[a] for a in sorted(platforms)]})
     digest = v.sha256(index)
-    files['oci/blobs/sha256/' + digest] = index
+    files[OCI_BLOB_PREFIX + digest] = index
     files['oci/index.json'] = encoded({'schemaVersion': 2, 'manifests': [
         {'mediaType': v.INDEX_TYPE, 'digest': 'sha256:' + digest, 'size': len(index)}]})
     image = {'repository': IMAGE, 'tag': version, 'index_digest': 'sha256:' + digest,
@@ -96,9 +101,9 @@ def receipt(files, reports, image, expected, artifact):
               artifact.get('name') == 'release-candidate-' + expected.candidate_sha and
               isinstance(artifact.get('digest'), str), 'producer_artifact')
     digest = v.parse_digest(artifact['digest'])
-    asset_names = ['wolf-manager-host-v' + expected.version + '-' + triple + '.tar.gz'
+    asset_names = ['wolf-manager-host-v' + expected.version + '-' + triple + ARCHIVE_SUFFIX
                    for triple in sorted(v.TRIPLES)]
-    asset_names += ['ha-wolf-manager-installer-v' + expected.version + '.tar.gz', 'SHA256SUMS']
+    asset_names += ['ha-wolf-manager-installer-v' + expected.version + ARCHIVE_SUFFIX, 'SHA256SUMS']
     checks = []
     for name, report in sorted(reports.items()):
         v.require(report.get('candidate_sha') == expected.candidate_sha and
@@ -208,15 +213,15 @@ def assemble(root, amd64, arm64, output):
         # Validate static binary and archive before it becomes a release subject.
         content = archive({'bin/wolf-manager-host': (data, 0o755)})
         v.inspect_tar(content, v.TRIPLES[triple])
-        files['wolf-manager-host-v' + version + '-' + triple + '.tar.gz'] = content
+        files['wolf-manager-host-v' + version + '-' + triple + ARCHIVE_SUFFIX] = content
     entries = {'install.sh': ((root / 'installer/install.sh').read_bytes(), 0o755)}
     for name, data in read_tree(root / 'installer/templates').items():
         entries['installer/templates/' + name] = (data, 0o644)
     content = archive(entries); v.inspect_tar(content, None)
-    files['ha-wolf-manager-installer-v' + version + '.tar.gz'] = content
+    files['ha-wolf-manager-installer-v' + version + ARCHIVE_SUFFIX] = content
     files['SHA256SUMS'] = ''.join(v.sha256(data) + '  ' + name + '\n'
-                                for name, data in sorted(files.items()) if name.endswith('.tar.gz')).encode()
-    files['image.json'] = encoded(image)
+                                for name, data in sorted(files.items()) if name.endswith(ARCHIVE_SUFFIX)).encode()
+    files[IMAGE_FILE] = encoded(image)
     write_tree(output, files)
 
 
@@ -241,7 +246,7 @@ def main():
     args = parser.parse_args()
     if args.command == 'merge':
         files, image = merge_oci([read_tree(args.amd64), read_tree(args.arm64)], args.version)
-        write_tree(args.output, files); (args.output / 'image.json').write_bytes(encoded(image))
+        write_tree(args.output, files); (args.output / IMAGE_FILE).write_bytes(encoded(image))
     elif args.command == 'report':
         v.require(v.HEX40.fullmatch(args.sha), 'producer_sha')
         args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -264,7 +269,7 @@ def main():
             workflow_id = run['workflow_id']
         expected = v.Expectations(REPOSITORY, args.sha, metadata(Path.cwd()), args.run_id,
                                   workflow_id, '.github/workflows/candidate.yaml')
-        result = receipt(files, reports, v.json_bytes(files['image.json']), expected,
+        result = receipt(files, reports, v.json_bytes(files[IMAGE_FILE]), expected,
                          v.json_bytes(args.artifact.read_bytes()))
         args.output.write_bytes(encoded(result))
 

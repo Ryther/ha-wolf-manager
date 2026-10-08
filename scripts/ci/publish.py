@@ -16,7 +16,7 @@ from scripts.ci import artifacts as a, producer as p, registry as r, verify_cand
 
 class GitHub(v.GitHubAuthority):
     def write(self, method, path, value=None, raw=None):
-        prefix = '/repos/' + p.REPOSITORY + '/'
+        prefix = REPOSITORY_API_PREFIX + p.REPOSITORY + '/'
         v.require(path.startswith(prefix) and not any(c in path for c in ('\r', '\n', '\\', '..')),
                   'publisher_api_path')
         url = ('https://uploads.github.com' if raw is not None else 'https://api.github.com') + path
@@ -29,8 +29,15 @@ class GitHub(v.GitHubAuthority):
             return v.json_bytes(response.read(8 * 1024 * 1024 + 1))
 
 
+REPOSITORY_API_PREFIX = '/repos/'
+
+CANDIDATE_WORKFLOW = '.github/workflows/candidate.yaml'
+
+RECEIPT_FILE = 'release-receipt.json'
+
+
 def tag_commit(authority, version):
-    prefix = '/repos/' + p.REPOSITORY
+    prefix = REPOSITORY_API_PREFIX + p.REPOSITORY
     ref = authority.get_json(prefix + '/git/ref/tags/v' + version)['object']
     for _ in range(5):
         v.require(v.HEX40.fullmatch(ref.get('sha', '')), 'release_tag_sha')
@@ -41,11 +48,11 @@ def tag_commit(authority, version):
 
 
 def prepare(authority, run_id, workflow_id, output):
-    prefix = '/repos/' + p.REPOSITORY
+    prefix = REPOSITORY_API_PREFIX + p.REPOSITORY
     run = authority.get_json(prefix + '/actions/runs/' + str(run_id))
-    sha = p.publisher_identity(run, workflow_id, '.github/workflows/candidate.yaml')
+    sha = p.publisher_identity(run, workflow_id, CANDIDATE_WORKFLOW)
     workflow = authority.get_json(prefix + '/actions/workflows/' + str(workflow_id))
-    v.require(workflow.get('id') == workflow_id and workflow.get('path') == '.github/workflows/candidate.yaml'
+    v.require(workflow.get('id') == workflow_id and workflow.get('path') == CANDIDATE_WORKFLOW
               and workflow.get('state') == 'active', 'publisher_workflow_allowlist')
     contents = authority.get_json(prefix + '/contents/version.txt?ref=' + sha)
     v.require(contents.get('encoding') == 'base64' and contents.get('type') == 'file'
@@ -63,7 +70,7 @@ def prepare(authority, run_id, workflow_id, output):
         return None
     release_id = p.release_identity(release, version, sha, tag_commit(authority, version))
     expected = v.Expectations(p.REPOSITORY, sha, version, run_id, workflow_id,
-                              '.github/workflows/candidate.yaml', event=run['event'])
+                              CANDIDATE_WORKFLOW, event=run['event'])
     candidate = a.find(authority, run_id, 'release-candidate-' + sha)
     receipt = a.find(authority, run_id, 'release-receipt-' + sha)
     output.mkdir(parents=True, exist_ok=False)
@@ -71,10 +78,10 @@ def prepare(authority, run_id, workflow_id, output):
     a.download(authority, candidate, candidate_path)
     receipt_path = output / 'receipt.zip'; a.download(authority, receipt, receipt_path)
     _, receipt_files = v.bundle_files(receipt_path)
-    v.require(set(receipt_files) == {'release-receipt.json'}, 'publisher_receipt_artifact')
-    receipt_raw = receipt_files['release-receipt.json']
+    v.require(set(receipt_files) == {RECEIPT_FILE}, 'publisher_receipt_artifact')
+    receipt_raw = receipt_files[RECEIPT_FILE]
     result = v.verify_candidate(receipt_raw, {candidate['id']: candidate_path}, authority, expected)
-    (output / 'release-receipt.json').write_bytes(receipt_raw)
+    (output / RECEIPT_FILE).write_bytes(receipt_raw)
     (output / 'verification.json').write_bytes(p.encoded(result))
     return expected, release_id, candidate_path, result
 
@@ -82,11 +89,11 @@ def prepare(authority, run_id, workflow_id, output):
 def publish(authority, prepared, output):
     expected, release_id, candidate_path, evidence = prepared
     _, files = v.bundle_files(candidate_path)
-    receipt_raw = (output / 'release-receipt.json').read_bytes(); receipt = v.json_bytes(receipt_raw)
+    receipt_raw = (output / RECEIPT_FILE).read_bytes(); receipt = v.json_bytes(receipt_raw)
     registry = r.Registry(os.environ['GITHUB_ACTOR'], authority.token)
     digest = r.publish(files, receipt['image'], registry.request)
     assets = {entry['name']: files[entry['name']] for entry in receipt['assets']}
-    assets['release-receipt.json'] = receipt_raw
+    assets[RECEIPT_FILE] = receipt_raw
     assets['release-verification.json'] = (output / 'verification.json').read_bytes()
     publication = {'schema_version': 1, 'candidate_sha': expected.candidate_sha,
                    'version': expected.version, 'workflow_run_id': expected.run_id,
@@ -95,7 +102,7 @@ def publish(authority, prepared, output):
                    'assets': {name: {'sha256': v.sha256(data), 'size_bytes': len(data)}
                               for name, data in sorted(assets.items())}}
     assets['publication.json'] = p.encoded(publication)
-    prefix = '/repos/' + p.REPOSITORY + '/releases/' + str(release_id)
+    prefix = REPOSITORY_API_PREFIX + p.REPOSITORY + '/releases/' + str(release_id)
     existing = authority.get_json(prefix + '/assets?per_page=100')
     names = [asset.get('name') for asset in existing]
     v.require(len(names) == len(set(names)), 'publisher_duplicate_asset')

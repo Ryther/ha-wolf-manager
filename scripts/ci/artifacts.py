@@ -20,8 +20,7 @@ def presigned_url(url):
     host = parsed.hostname or ''
     v.require(parsed.scheme == 'https' and parsed.port in (None, 443)
               and not parsed.username and not parsed.password and not parsed.fragment
-              and (host.endswith('.blob.core.windows.net') or
-                   host.endswith('.actions.githubusercontent.com')),
+              and host.endswith(('.blob.core.windows.net', '.actions.githubusercontent.com')),
               'artifact_redirect_origin')
     return url
 
@@ -46,7 +45,7 @@ def download(authority, info, output):
         with urllib.request.build_opener(v._NoRedirect).open(url, timeout=60) as response:
             v.require(response.status == 200, 'artifact_download_status')
             data = response.read(v.MAX_BUNDLE + 1)
-    except (urllib.error.URLError, OSError):
+    except OSError:
         raise v.VerificationError('artifact_download_unavailable') from None
     v.require(len(data) == info['size_in_bytes'] and v.sha256(data) == digest, 'artifact_download_digest')
     output.parent.mkdir(parents=True, exist_ok=True)

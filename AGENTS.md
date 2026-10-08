@@ -55,8 +55,12 @@ Measure Rust coverage with the verified `cargo-llvm-cov` tool from
 Run documented opt-in broker/root fixtures only in disposable environments.
 Report executable-line denominators, component gaps and exclusions; a passing
 Sonar analysis without imported coverage is insufficient. Rust-only reports do
-not measure browser or Python execution, and line coverage does not establish
-crash safety or branch coverage.
+not measure browser or Python execution. Measure release scripts with the pinned
+coverage.py and `scripts/ci/python_coverage.ini`; collect real Chromium/Node V8
+execution through `WOLF_UI_COVERAGE=1 npm run test:ui` and
+`scripts/ci/browser_coverage.cjs`. Candidate publication requires imported
+coverage for every measured language and at least 80% combined project coverage.
+Line coverage does not establish crash safety or branch coverage.
 
 Run focused meaningful checks during development and affected required checks
 before completion. Browser API fixtures prove the browser contract; they do not

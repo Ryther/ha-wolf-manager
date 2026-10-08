@@ -28,3 +28,12 @@ MkDocs 2.0 development releases are prereleases; the site uses the latest stable
 1.6.1 with the stable Material theme. Reassess compatibility and maintenance
 before upgrading either package. Public docs build strictly with
 `python -m mkdocs build --strict`; local planning and evidence are excluded.
+
+## Execution coverage tools
+
+`cargo-llvm-cov` 0.9.1 measures the pinned Rust toolchain. `coverage.py` 7.16.2
+measures all release Python modules with the checked-in configuration. Browser
+tests collect Chromium V8 execution; `v8-to-istanbul` 9.3.0 converts those reports
+and its own measured Node execution to LCOV. Both are development-only tools;
+the scratch runtime contains no Python or Node interpreter. Pins and primary
+release sources are recorded in `scripts/ci/versions.json`.

@@ -10,8 +10,8 @@ from dataclasses import dataclass
 import hashlib
 import io
 import json
-import os
 import lzma
+import os
 from pathlib import Path, PurePosixPath
 import re
 import stat
@@ -28,9 +28,9 @@ REQUIRED_CHECKS = frozenset((
     'codeql', 'secrets', 'cargo-audit', 'image-scan-amd64', 'image-scan-arm64', 'sonar',
 ))
 TRIPLES = {'x86_64-unknown-linux-musl': 62, 'aarch64-unknown-linux-musl': 183}
-HEX64 = re.compile(r'[0-9a-f]{64}\Z')
-HEX40 = re.compile(r'[0-9a-f]{40}\Z')
-SEMVER = re.compile(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\Z')
+HEX64 = re.compile(r'[\da-f]{64}\Z', re.ASCII)
+HEX40 = re.compile(r'[\da-f]{40}\Z', re.ASCII)
+SEMVER = re.compile(r'(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)\Z', re.ASCII)
 MAX_FILE = 256 * 1024 * 1024
 MAX_BUNDLE = 1024 * 1024 * 1024
 INDEX_TYPE = 'application/vnd.oci.image.index.v1+json'
@@ -41,6 +41,7 @@ class VerificationError(ValueError):
     """Safe, stable refusal code; never forward a token or raw API error."""
 
 
+ARCHIVE_SUFFIX = '.tar.gz'
 def require(condition, code):
     if not condition:
         raise VerificationError(code)
@@ -66,7 +67,7 @@ def json_bytes(data):
         raise VerificationError('non_finite_json')
     try:
         return json.loads(data, object_pairs_hook=unique, parse_constant=constant)
-    except (ValueError, UnicodeError) as error:
+    except ValueError as error:
         if isinstance(error, VerificationError):
             raise
         raise VerificationError('malformed_json') from None
@@ -136,7 +137,7 @@ class GitHubAuthority:
                 require(response.status == 200, 'authority_http_status')
                 data = response.read(8 * 1024 * 1024 + 1)
             return json_bytes(data)
-        except (urllib.error.URLError, OSError):
+        except OSError:
             raise VerificationError('authority_unavailable') from None
 
 
@@ -263,9 +264,21 @@ def bundle_files(path):
                     data = bundle.read(entry)
                     require(len(data) == entry.file_size, 'zip_size')
                     files[name] = data
-    except (zipfile.BadZipFile, RuntimeError, OSError, NotImplementedError, zlib.error, lzma.LZMAError):
+    except (zipfile.BadZipFile, RuntimeError, OSError, zlib.error, lzma.LZMAError):
         raise VerificationError('malformed_bundle') from None
     return raw, files
+
+
+def verify_dynamic_table(data, start, size):
+    require(size % 16 == 0, 'elf_dynamic_table')
+    terminated = False
+    for cursor in range(start, start + size, 16):
+        tag, _ = struct.unpack('<QQ', data[cursor:cursor+16])
+        require(tag != 1, 'elf_dynamic_dependency')
+        if tag == 0:
+            terminated = True
+            break
+    require(terminated, 'elf_dynamic_table')
 
 
 def static_elf(data, machine):
@@ -280,18 +293,29 @@ def static_elf(data, machine):
         kind, flags, start, _, _, size, memory, _ = struct.unpack('<IIQQQQQQ', data[offset+i*56:offset+(i+1)*56])
         require(kind != 3 and start + size <= len(data) and memory >= size, 'dynamic_or_malformed_elf')
         if kind == 2:
-            require(size % 16 == 0, 'elf_dynamic_table')
-            terminated = False
-            for cursor in range(start, start + size, 16):
-                tag, _ = struct.unpack('<QQ', data[cursor:cursor+16])
-                require(tag != 1, 'elf_dynamic_dependency')
-                if tag == 0:
-                    terminated = True
-                    break
-            require(terminated, 'elf_dynamic_table')
+            verify_dynamic_table(data, start, size)
         if kind == 1 and flags & 1 and size:
             executable = True
     require(executable, 'elf_executable_segment')
+
+
+def inspect_tar_file(archive, entry, name, binary_machine):
+    executable = False
+    template = False
+    stream = archive.extractfile(entry)
+    require(stream is not None, 'tar_file')
+    content = stream.read(MAX_FILE + 1)
+    require(len(content) == entry.size, 'tar_size')
+    if binary_machine and name == 'bin/wolf-manager-host':
+        require(entry.mode & 0o111, 'target_executable')
+        static_elf(content, binary_machine)
+        executable = True
+    elif not binary_machine and name == 'install.sh':
+        require(entry.mode & 0o111 and content.startswith(b'#!/bin/sh\n'), 'installer_executable')
+        executable = True
+    if name.startswith('installer/templates/'):
+        template = True
+    return executable, template
 
 
 def inspect_tar(data, binary_machine=None):
@@ -314,19 +338,9 @@ def inspect_tar(data, binary_machine=None):
                 total += entry.size
                 require(total <= MAX_BUNDLE, 'archive_size')
                 if entry.isfile():
-                    stream = archive.extractfile(entry)
-                    require(stream is not None, 'tar_file')
-                    content = stream.read(MAX_FILE + 1)
-                    require(len(content) == entry.size, 'tar_size')
-                    if binary_machine and name == 'bin/wolf-manager-host':
-                        require(entry.mode & 0o111, 'target_executable')
-                        static_elf(content, binary_machine)
-                        executable = True
-                    elif not binary_machine and name == 'install.sh':
-                        require(entry.mode & 0o111 and content.startswith(b'#!/bin/sh\n'), 'installer_executable')
-                        executable = True
-                    if name.startswith('installer/templates/'):
-                        template = True
+                    file_executable, file_template = inspect_tar_file(archive, entry, name, binary_machine)
+                    executable |= file_executable
+                    template |= file_template
     except (tarfile.TarError, OSError, EOFError):
         raise VerificationError('malformed_archive') from None
     require(executable and (binary_machine or template), 'archive_required_target')
@@ -372,18 +386,7 @@ def verify_oci(files, image):
             blob(layer)
 
 
-def _verify_candidate(receipt_bytes, artifacts, authority, expected):
-    """Verify exact downloaded GitHub ZIP bytes. Return immutable evidence hashes.
-
-    artifacts maps artifact ID to the preserved ZIP path, never extracted content.
-    Do not construct Expectations from the untrusted receipt.
-    """
-    expected.validate()
-    receipt = json_bytes(receipt_bytes)
-    receipt_identity(receipt, expected)
-    run, workflow, jobs = authority_evidence(authority, expected)
-    # Select the producer artifact independently; a receipt cannot nominate a
-    # different artifact from the same otherwise-successful workflow run.
+def select_candidate_artifact(authority, expected):
     selected = []
     total = None
     listed = []
@@ -402,10 +405,28 @@ def _verify_candidate(receipt_bytes, artifacts, authority, expected):
         if artifact.get('name') == 'release-candidate-' + expected.candidate_sha:
             selected.append(artifact)
     require(len(selected) == 1 and positive_int(selected[0].get('id')), 'candidate_artifact_authority')
-    selected_id = selected[0]['id']
-    require(isinstance(artifacts, dict) and set(artifacts) == {selected_id}, 'artifact_mapping')
-    expected_names = {'wolf-manager-host-v'+expected.version+'-'+triple+'.tar.gz' for triple in TRIPLES}
-    installer = 'ha-wolf-manager-installer-v'+expected.version+'.tar.gz'
+    return selected[0]
+
+
+def authenticate_bundle(artifact_id, path, authority, expected, selected, run):
+    raw, files = bundle_files(path)
+    info = authority.get_json(f'/repos/{expected.repository}/actions/artifacts/{artifact_id}')
+    require(isinstance(info, dict) and info.get('id') == artifact_id and info.get('expired') is False
+            and info.get('name') == 'release-candidate-'+expected.candidate_sha
+            and info.get('digest') == selected.get('digest') == 'sha256:'+sha256(raw)
+            and info.get('size_in_bytes') == len(raw), 'artifact_authority_digest')
+    binding = info.get('workflow_run', {})
+    require(binding.get('id') == expected.run_id and binding.get('head_sha') == expected.candidate_sha
+            and binding.get('head_branch') == expected.branch
+            and binding.get('repository_id') == run['repository']['id']
+            and binding.get('head_repository_id') == run['head_repository']['id'], 'artifact_authority_identity')
+    return sha256(raw), files, info
+
+
+def verify_release_assets(receipt, artifacts, authority, expected, selected, run):
+    selected_id = selected['id']
+    expected_names = {'wolf-manager-host-v'+expected.version+'-'+triple+ARCHIVE_SUFFIX for triple in TRIPLES}
+    installer = 'ha-wolf-manager-installer-v'+expected.version+ARCHIVE_SUFFIX
     expected_names |= {installer, 'SHA256SUMS'}
     assets = receipt['assets']
     require(isinstance(assets, list) and len(assets) == 4, 'asset_set')
@@ -426,18 +447,8 @@ def _verify_candidate(receipt_bytes, artifacts, authority, expected):
         require(asset['download_url'] == canonical_url, 'artifact_url')
         if artifact_id not in bundles:
             require(artifact_id in artifacts, 'missing_artifact')
-            raw, files = bundle_files(artifacts[artifact_id])
-            info = authority.get_json(f'/repos/{expected.repository}/actions/artifacts/{artifact_id}')
-            require(isinstance(info, dict) and info.get('id') == artifact_id and info.get('expired') is False
-                    and info.get('name') == 'release-candidate-'+expected.candidate_sha
-                    and info.get('digest') == selected[0].get('digest') == 'sha256:'+sha256(raw)
-                    and info.get('size_in_bytes') == len(raw), 'artifact_authority_digest')
-            binding = info.get('workflow_run', {})
-            require(binding.get('id') == expected.run_id and binding.get('head_sha') == expected.candidate_sha
-                    and binding.get('head_branch') == expected.branch
-                    and binding.get('repository_id') == run['repository']['id']
-                    and binding.get('head_repository_id') == run['head_repository']['id'], 'artifact_authority_identity')
-            bundles[artifact_id] = (sha256(raw), files)
+            digest, files, info = authenticate_bundle(artifact_id, artifacts[artifact_id], authority, expected, selected, run)
+            bundles[artifact_id] = (digest, files)
             metadata[artifact_id] = info
             for member, content in files.items():
                 require(member not in merged, 'duplicate_bundle_member')
@@ -448,12 +459,31 @@ def _verify_candidate(receipt_bytes, artifacts, authority, expected):
         require(data is not None and len(data) == asset['size_bytes'] and sha256(data) == asset['sha256'], 'asset_digest')
         verified_assets[name] = data
         if name != 'SHA256SUMS':
-            triple = next((t for t in TRIPLES if name.endswith('-'+t+'.tar.gz')), None)
+            triple = next((t for t in TRIPLES if name.endswith('-'+t+ARCHIVE_SUFFIX)), None)
             inspect_tar(data, TRIPLES[triple] if triple else None)
     require(seen == expected_names and set(artifacts) == set(bundles), 'asset_set')
     sums = verified_assets['SHA256SUMS']
     expected_sums = ''.join(sha256(verified_assets[name])+'  '+name+'\n' for name in sorted(expected_names-{'SHA256SUMS'})).encode()
     require(sums == expected_sums, 'checksum_manifest')
+    return bundles, metadata, merged
+
+
+def _verify_candidate(receipt_bytes, artifacts, authority, expected):
+    """Verify exact downloaded GitHub ZIP bytes. Return immutable evidence hashes.
+
+    artifacts maps artifact ID to the preserved ZIP path, never extracted content.
+    Do not construct Expectations from the untrusted receipt.
+    """
+    expected.validate()
+    receipt = json_bytes(receipt_bytes)
+    receipt_identity(receipt, expected)
+    run, workflow, jobs = authority_evidence(authority, expected)
+    # Select the producer artifact independently; a receipt cannot nominate a
+    # different artifact from the same otherwise-successful workflow run.
+    selected = select_candidate_artifact(authority, expected)
+    selected_id = selected['id']
+    require(isinstance(artifacts, dict) and set(artifacts) == {selected_id}, 'artifact_mapping')
+    bundles, metadata, merged = verify_release_assets(receipt, artifacts, authority, expected, selected, run)
     verify_oci(merged, receipt['image'])
     evidence_hashes = {}
     for check in receipt['checks']:

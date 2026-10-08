@@ -266,3 +266,7 @@
 !/wolf_manager/DOCS.md
 !/wolf_manager/README.md
 !/wolf_manager/config.yaml
+
+!scripts/ci/browser_coverage.cjs
+!scripts/ci/python_coverage.ini
+!tests/release/test_network_contracts.py

@@ -6,17 +6,20 @@ from scripts.ci import producer as p
 from scripts.ci import verify_candidate as v
 
 
+SUBJECT_FILE = 'subject.json'
+
+
 def verify(path, sha, checkout=True):
     v.require(v.HEX40.fullmatch(sha), 'subject_sha')
     if checkout:
         actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
         v.require(actual == sha, 'subject_checkout')
     files = p.read_tree(path)
-    subject = v.json_bytes(files['subject.json'])
+    subject = v.json_bytes(files[SUBJECT_FILE])
     v.require(subject.get('candidate_sha') == sha and v.SEMVER.fullmatch(subject.get('version', '')),
               'subject_identity')
     expected = subject.get('files')
-    v.require(isinstance(expected, dict) and set(expected) == set(files) - {'subject.json'}, 'subject_files')
+    v.require(isinstance(expected, dict) and set(expected) == set(files) - {SUBJECT_FILE}, 'subject_files')
     for name, digest in expected.items():
         v.safe_path(name); v.require(v.sha256(files[name]) == digest, 'subject_digest')
     image = v.json_bytes(files['image.json']); v.verify_oci(files, image)
@@ -30,15 +33,15 @@ def verify(path, sha, checkout=True):
     sums = ''.join(v.sha256(data) + '  ' + name + '\n' for name, data in sorted(archives.items())).encode()
     v.require(files['SHA256SUMS'] == sums, 'subject_checksums')
     return {'candidate_sha': sha, 'version': version, 'image_index_digest': image['index_digest'],
-            'subject_manifest_sha256': v.sha256(files['subject.json']),
+            'subject_manifest_sha256': v.sha256(files[SUBJECT_FILE]),
             'checksums_sha256': v.sha256(sums)}
 
 
 def seal(path, sha):
     v.require(v.HEX40.fullmatch(sha), 'subject_sha')
     files = p.read_tree(path)
-    v.require('subject.json' not in files, 'subject_already_sealed')
-    (path / 'subject.json').write_bytes(p.encoded({'candidate_sha': sha,
+    v.require(SUBJECT_FILE not in files, 'subject_already_sealed')
+    (path / SUBJECT_FILE).write_bytes(p.encoded({'candidate_sha': sha,
         'version': p.metadata(Path.cwd()), 'files': {name: v.sha256(data) for name, data in sorted(files.items())}}))
 
 
