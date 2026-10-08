@@ -353,9 +353,13 @@ async fn handle(state: AppState, request: Request<Body>) -> Result<Response, Api
     }
     let path = path.unwrap();
     let q = query(&parts.uri)?;
-    let bytes = to_bytes(body, RPC_MAX_BYTES)
-        .await
-        .map_err(|_| SafeError::new("payload_too_large"))?;
+    let bytes = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        to_bytes(body, RPC_MAX_BYTES),
+    )
+    .await
+    .map_err(|_| SafeError::new("host_unavailable"))?
+    .map_err(|_| SafeError::new("payload_too_large"))?;
     let headers = parts.headers;
     let origin = header(&headers, "origin");
     let csrf = header(&headers, "x-wolf-csrf");
@@ -565,7 +569,7 @@ fn static_asset(state: &AppState, path: &str, headers: &HeaderMap) -> Result<Res
     response
         .headers_mut()
         .insert("x-content-type-options", "nosniff".parse().unwrap());
-    response.headers_mut().insert("content-security-policy","default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' https://cdn.cloudflare.steamstatic.com https://shared.cloudflare.steamstatic.com; frame-ancestors 'self'; base-uri 'self'".parse().unwrap());
+    response.headers_mut().insert("content-security-policy","default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' https://shared.fastly.steamstatic.com; frame-ancestors 'self'; base-uri 'self'".parse().unwrap());
     response
         .headers_mut()
         .insert("cache-control", "no-store".parse().unwrap());

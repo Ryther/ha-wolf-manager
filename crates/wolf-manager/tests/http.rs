@@ -401,3 +401,26 @@ async fn fresh_standalone_is_operationally_ready_while_bootstrap_required() {
     assert_eq!(body["administrator_ready"], false);
     assert_eq!(body["mqtt_enabled"], false);
 }
+
+#[tokio::test]
+async fn backend_image_policy_allows_only_self_and_the_canonical_steam_cover_origin() {
+    let (_fixture, app) = standalone();
+    let response = app.oneshot(request("/", "192.0.2.8:1234")).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let policy = response.headers()["content-security-policy"]
+        .to_str()
+        .unwrap();
+    let image_sources = policy
+        .split(';')
+        .find_map(|directive| directive.trim().strip_prefix("img-src "))
+        .unwrap();
+    let cover = wolf_core::steam_cover_url(&wolf_core::AppId::new("570").unwrap());
+    let cover_origin = url::Url::parse(&cover)
+        .unwrap()
+        .origin()
+        .ascii_serialization();
+    assert_eq!(
+        image_sources.split_whitespace().collect::<Vec<_>>(),
+        vec!["'self'", cover_origin.as_str()]
+    );
+}
