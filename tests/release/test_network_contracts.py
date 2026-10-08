@@ -40,11 +40,11 @@ class NetworkContracts(unittest.TestCase):
     def test_artifact_redirect_download_keeps_credentials_on_api_only(self):
         data = b'original zip bytes'
         authority = MagicMock(token='synthetic-only')
-        authority.opener.open.side_effect = self.http_error(302, {'Location': 'https://fixture.blob.core.windows.net/zip?sig=test'})
+        authority.opener.open.side_effect = [self.http_error(302, {'Location': 'https://fixture.blob.core.windows.net/zip?sig=test'}) for _ in range(2)]
         cdn = MagicMock()
         cdn.open.return_value = response(data)
         info = {'id': 42, 'expired': False, 'size_in_bytes': len(data), 'digest': 'sha256:' + v.sha256(data)}
-        with tempfile.TemporaryDirectory() as directory, patch.object(a.urllib.request, 'build_opener', return_value=cdn):
+        with tempfile.TemporaryDirectory() as directory, patch.object(a.urllib.request, 'build_opener', side_effect=[authority.opener, cdn, authority.opener, cdn]):
             output = Path(directory) / 'artifact.zip'
             self.assertEqual(a.download(authority, info, output), data)
             self.assertEqual(output.read_bytes(), data)
@@ -61,11 +61,12 @@ class NetworkContracts(unittest.TestCase):
         authority = MagicMock(token='synthetic-only')
         with tempfile.TemporaryDirectory() as directory:
             out = Path(directory) / 'never.zip'
-            with self.assertRaisesRegex(v.VerificationError, 'artifact_missing_redirect'):
-                a.download(authority, info, out)
+            with patch.object(a.urllib.request, 'build_opener', return_value=authority.opener):
+                with self.assertRaisesRegex(v.VerificationError, 'artifact_missing_redirect'):
+                    a.download(authority, info, out)
             authority.opener.open.side_effect = self.http_error(302, {'Location': 'https://fixture.actions.githubusercontent.com/zip'})
             cdn = MagicMock(); cdn.open.side_effect = OSError('private endpoint')
-            with patch.object(a.urllib.request, 'build_opener', return_value=cdn):
+            with patch.object(a.urllib.request, 'build_opener', side_effect=[authority.opener, cdn]):
                 with self.assertRaisesRegex(v.VerificationError, '^artifact_download_unavailable$'):
                     a.download(authority, info, out)
             self.assertFalse(out.exists())

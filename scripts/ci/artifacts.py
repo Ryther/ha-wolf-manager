@@ -15,6 +15,12 @@ from scripts.ci import producer as p
 from scripts.ci import verify_candidate as v
 
 
+class _ArtifactRedirect(urllib.request.HTTPRedirectHandler):
+    """Expose the API response for inspection without following its redirect."""
+    def redirect_request(self, request, response, code, message, headers, url):
+        return None
+
+
 def presigned_url(url):
     parsed = urllib.parse.urlsplit(url)
     host = parsed.hostname or ''
@@ -35,11 +41,12 @@ def download(authority, info, output):
         'Authorization': 'Bearer ' + authority.token, 'Accept': 'application/vnd.github+json',
         'X-GitHub-Api-Version': '2026-03-10', 'User-Agent': 'ha-wolf-manager-artifact-receiver'})
     try:
-        authority.opener.open(request, timeout=30)
+        urllib.request.build_opener(_ArtifactRedirect).open(request, timeout=30)
         raise v.VerificationError('artifact_missing_redirect')
     except urllib.error.HTTPError as error:
-        v.require(error.code == 302, 'artifact_http_status')
-        url = presigned_url(error.headers.get('Location', ''))
+        with error:
+            v.require(error.code == 302, 'artifact_http_status')
+            url = presigned_url(error.headers.get('Location', ''))
     try:
         # Even a second signed-URL redirect is refused. Never forward API credentials.
         with urllib.request.build_opener(v._NoRedirect).open(url, timeout=60) as response:
