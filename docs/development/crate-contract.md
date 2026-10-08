@@ -10,7 +10,7 @@ Central integrator owns workspace Cargo.toml/Cargo.lock, AGENTS.md, README, publ
 - OperationKind/OperationState plus pure all-child reconciliation outcomes, host capability/status and catalog attributes/manifest DTOs. All possibly dispatched child evidence is required. Shared error codes are stable, descriptions safe.
 - Pure topic/discovery builders include PC identity and app ID. Exact ASCII ON/OFF validator rejects retained messages and malformed payloads.
 
-Keep modules ids/settings/rpc/operations/catalog/mqtt/error small and independently tested. All downstream components use these public contracts. Pure core has no filesystem/network/process calls. The manager and host crates remain empty scaffolds until their implementation tasks run; do not mistake compilation for runtime evidence.
+Keep modules ids/settings/rpc/operations/catalog/mqtt/error small and independently tested. All downstream components use these public contracts. Pure core has no filesystem/network/process calls. Manager state/auth and host filesystem/journal/VDF adapters are being implemented as recorded in docs/progress.md; do not mistake compilation or fixture checks for a complete runtime.
 
 ## Frontend/manager boundary
 

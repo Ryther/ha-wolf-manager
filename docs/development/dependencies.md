@@ -5,3 +5,5 @@ Selected 2026-10-08 from the canonical crates.io registry using cargo search/inf
 Rustix 1.1.5 was verified from crates.io and https://docs.rs/rustix/1.1.5/ before selection. It provides anchored openat2/rename operations for privileged filesystem grants; unsupported kernel capability is a refusal, never an unsafe fallback.
 
 Rustix descriptor xattr APIs were checked against the canonical upstream source and docs.rs: https://docs.rs/rustix/1.1.5/rustix/fs/fn.flistxattr.html and https://docs.rs/rustix/1.1.5/rustix/fs/fn.fsetxattr.html (2026-10-08). Metadata copy is bounded and verified; unsupported preservation refuses before target replacement.
+
+TOML1.1.7 document API checked against canonical crate source and https://docs.rs/toml/1.1.7+spec-1.1.0/toml/ (2026-10-08): parse complete documents as Table or through toml::from_str, not Value::from_str.

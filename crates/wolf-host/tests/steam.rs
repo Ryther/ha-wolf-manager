@@ -1,0 +1,127 @@
+use wolf_core::*;
+use wolf_manager_host::{steam, vdf::Document};
+fn settings() -> Settings {
+    let mut settings = Settings::default();
+    settings.games.insert(
+        AppId::new("42").unwrap(),
+        GameSettings {
+            direct_launch: true,
+            proton_cachyos: true,
+            parameters: vec![
+                ParameterId::new("fsr4").unwrap(),
+                ParameterId::new("fsr4_indicator").unwrap(),
+            ],
+        },
+    );
+    settings
+}
+#[test]
+fn ordered_launch_parameters_preserve_custom_game_fields() {
+    let settings = settings();
+    let game = settings.games.values().next().unwrap();
+    assert_eq!(
+        steam::launch_options(game, &settings).unwrap(),
+        "PROTON_FSR4_UPGRADE=1 PROTON_FSR4_INDICATOR=1 %command%"
+    );
+    let original = "// keep this comment\n\"UserLocalConfigStore\" { \"Software\" { \"Valve\" { \"Steam\" { \"apps\" { \"42\" { \"Other\" \"preserve\" } } } } } }\n";
+    let result = steam::localconfig(original, &settings).unwrap();
+    assert!(result.starts_with("// keep this comment"));
+    let doc = Document::parse(&result).unwrap();
+    assert_eq!(
+        doc.get(&[
+            "UserLocalConfigStore",
+            "Software",
+            "Valve",
+            "Steam",
+            "apps",
+            "42",
+            "Other"
+        ])
+        .unwrap(),
+        Some("preserve".into())
+    );
+    assert_eq!(
+        doc.get(&[
+            "UserLocalConfigStore",
+            "Software",
+            "Valve",
+            "Steam",
+            "apps",
+            "42",
+            "LaunchOptions"
+        ])
+        .unwrap(),
+        Some(steam::launch_options(game, &settings).unwrap())
+    );
+}
+#[test]
+fn compatibility_preserves_unmanaged_mappings() {
+    let original = "\"InstallConfigStore\" { \"Software\" { \"Valve\" { \"Steam\" { \"CompatToolMapping\" { \"99\" { \"name\" \"custom proton\" } } } } } }";
+    let result = steam::compatibility(original, &settings(), "proton-cachyos").unwrap();
+    let doc = Document::parse(&result).unwrap();
+    assert_eq!(
+        doc.get(&[
+            "InstallConfigStore",
+            "Software",
+            "Valve",
+            "Steam",
+            "CompatToolMapping",
+            "99",
+            "name"
+        ])
+        .unwrap(),
+        Some("custom proton".into())
+    );
+    assert_eq!(
+        doc.get(&[
+            "InstallConfigStore",
+            "Software",
+            "Valve",
+            "Steam",
+            "CompatToolMapping",
+            "42",
+            "name"
+        ])
+        .unwrap(),
+        Some("proton-cachyos".into())
+    );
+}
+#[test]
+fn generated_sections_preserve_uuid_pairing_and_custom_apps_and_converge() {
+    let original = "config_version = 7\nuuid = 'existing-uuid'\n[[profiles]]\nname='custom-profile'\n[[profiles.apps]]\ntitle='Custom app'\n[profiles.apps.runner]\ntype='process'\nrun_cmd='true'\n";
+    let generated = "[[profiles.apps]]\ntitle='Managed game'\n[profiles.apps.runner]\ntype='process'\nrun_cmd='true'";
+    let once = steam::generated_sections(original, "", generated).unwrap();
+    assert!(once.starts_with(original));
+    assert_eq!(
+        steam::generated_sections(&once, "", generated).unwrap(),
+        once
+    );
+    assert!(
+        steam::generated_sections(
+            "# BEGIN MACHINE-SETUP GENERATED USER APPS\nbroken",
+            "",
+            generated
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn marker_text_inside_multiline_user_string_is_preserved() {
+    let original = "config_version=7\nnote='''\n# BEGIN HA-WOLF-MANAGER GENERATED USER APPS\ncustom text\n# END HA-WOLF-MANAGER GENERATED USER APPS\n'''\n[[profiles]]\nname='custom'\n";
+    let result = steam::generated_sections(original, "", "").unwrap();
+    assert!(result.starts_with(original));
+    assert_eq!(steam::generated_sections(&result, "", "").unwrap(), result);
+}
+
+#[test]
+fn legacy_generated_sections_are_adopted_without_duplicate_apps() {
+    let original = "config_version=7\nuuid='keep-identity'\n[[profiles]]\nname='custom'\n# BEGIN MACHINE-SETUP GENERATED USER APPS\n[[profiles.apps]]\ntitle='Old generated'\n# END MACHINE-SETUP GENERATED USER APPS\n";
+    let result =
+        steam::generated_sections(original, "", "[[profiles.apps]]\ntitle='New generated'")
+            .unwrap();
+    assert!(!result.contains("Old generated"));
+    assert!(result.contains("uuid='keep-identity'"));
+    assert_eq!(result.matches("title='New generated'").count(), 1);
+    assert!(!result.contains("MACHINE-SETUP"));
+}
