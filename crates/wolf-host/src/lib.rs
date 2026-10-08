@@ -1,4 +1,9 @@
+pub mod catalog;
+pub mod catalog_mqtt;
+pub mod dispatcher;
+pub mod install;
 pub mod journal;
+pub mod policy;
 pub mod steam;
 pub mod transactions;
 pub mod vdf;
