@@ -13,8 +13,14 @@ The tests observe browser requests and rendered behavior: deployment prefix,
 origin-bound CSRF, challenge login/bootstrap, password revocation UI, explicit
 host fingerprint enrollment, two-PC catalog identity, unsupported capabilities,
 desired versus staged/running revision, service admission versus observation,
-uncertain reconciliation, bounded logs, error recovery and keyboard/mobile
-layout. Credentials are test-only strings and never enter local storage.
+uncertain reconciliation, operation pagination, bounded logs, error recovery,
+archive confirmation, compact game settings, keyboard disclosures, reduced
+motion and layouts down to 320 pixels. Credentials are test-only strings and never enter local storage.
+
+The Chromium fixture records actual JavaScript execution with V8 coverage
+under ignored `_tmp/evidence/js-v8/`. Coverage collection does not call
+application functions directly or substitute generated execution. These browser
+reports measure JavaScript, not Rust backend behavior or real Ingress admission.
 
 Ignored `_tmp/ui-evidence/` can hold RED/GREEN logs and screenshots. Test outputs
 and browser installation caches are development artifacts, not runtime assets.

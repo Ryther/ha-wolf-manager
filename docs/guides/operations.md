@@ -14,6 +14,8 @@ Actual native HTTPS runtime capture with synthetic PC metadata and no connected 
 
 ## Desired, staged and running
 
+Expand **Configuration revisions** below the observed service status to compare all three values.
+
 | Revision | Meaning | What changes it |
 | --- | --- | --- |
 | Desired | Manager's saved settings | Save game settings, shared parameters or diagnostic setting |
@@ -22,11 +24,11 @@ Actual native HTTPS runtime capture with synthetic PC metadata and no connected 
 
 Saving is not a restart. **Stage settings** uploads a validated override without changing active Steam settings. **Start** and **Restart** stage the desired revision before the lifecycle action. A staging failure leaves the existing service intact. Starting an already active service cannot silently apply a new revision: finish the gaming session and explicitly restart when you want the new settings applied. **Stop** restores tracked temporary Steam overlays; restoration failure is a recovery condition, not permission to overwrite backups.
 
-A button's admission notice includes an operation ID. Refresh **Operation history** to see its outcome. A queued or running operation is not success; a current ON state does not prove that a specific operation succeeded.
+A button's admission notice includes an operation ID. Expand and refresh **Operation history** to see its outcome. A queued or running operation is not success; a current ON state does not prove that a specific operation succeeded.
 
 ## Games and reusable parameters
 
-The catalog comes from each PC's authorized Steam libraries. A missing game is not automatically uninstalled or deleted by the manager. Use a game's **Direct launch** toggle, optional **Proton-CachyOS** toggle and **Reusable parameters** selector, then **Save game settings**. Proton-CachyOS is available only when the host policy grants an existing installation and the host reports that capability.
+The catalog comes from each PC's authorized Steam libraries. A missing game is not automatically uninstalled or deleted by the manager. Expand a game's **Game settings**, then use its **Direct launch** toggle, optional **Proton-CachyOS** toggle and **Reusable parameters** selector, then **Save game settings**. Proton-CachyOS is available only when the host policy grants an existing installation and the host reports that capability.
 
 **Shared configuration** includes **Add parameter**, per-parameter editing/deletion and **Diagnostic test ball**. The test ball is a Wolf diagnostic application; it does not change log verbosity. The built-in **FSR4** parameter requests `PROTON_FSR4_UPGRADE=1 %command%`; **FSR4 Indicator** requests `PROTON_FSR4_INDICATOR=1 %command%`. Support still depends on the game, Proton build and GPU. These controls are not a claim of FSR4 compatibility on every system.
 

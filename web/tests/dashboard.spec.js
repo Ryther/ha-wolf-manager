@@ -1,7 +1,14 @@
-const {test, expect}=require('@playwright/test');
-test.setTimeout(10000);
+const {test:baseTest, expect}=require('@playwright/test');
 const fs=require('node:fs/promises');
 const path=require('node:path');
+const test=baseTest.extend({page:async({page},use,testInfo)=>{
+ await page.coverage.startJSCoverage({resetOnNavigation:false});
+ await use(page);
+ const entries=await page.coverage.stopJSCoverage();
+ const directory=path.resolve('_tmp/evidence/js-v8');await fs.mkdir(directory,{recursive:true});
+ await fs.writeFile(path.join(directory,testInfo.testId.replace(/[^a-zA-Z0-9_-]/g,'_')+'-'+testInfo.retry+'.json'),JSON.stringify(entries.filter(entry=>entry.url.endsWith('/app.js'))));
+}});
+test.setTimeout(10000);
 const prefix='/api/hassio_ingress/example/';
 const rev='a'.repeat(64), newer='b'.repeat(64);
 async function fixture(page,mode='ingress',initialized=true){
@@ -50,8 +57,8 @@ test('Ingress nonce uses browser origin and prefix-safe PC requests, with escape
  expect(calls.find(c=>c.endpoint==='auth/csrf').headers['x-wolf-origin']).toBe('http://wolf.test');
 });
 test('saved desired revision stages separately and unsupported Proton stays disabled',async({page})=>{
- const calls=await fixture(page); await page.getByRole('checkbox',{name:'Direct launch'}).check();await expect(page.getByRole('checkbox',{name:'Proton-CachyOS'})).toBeDisabled();
- await page.getByRole('button',{name:'Save game settings'}).click();await expect(page.getByText('Desired: '+newer)).toBeVisible();await expect(page.getByText('Running: '+rev)).toBeVisible();
+ const calls=await fixture(page);await page.getByText('Game settings',{exact:true}).click(); await page.getByRole('checkbox',{name:'Direct launch'}).check();await expect(page.getByRole('checkbox',{name:'Proton-CachyOS'})).toBeDisabled();
+ await page.getByRole('button',{name:'Save game settings'}).click();await page.getByText('Configuration revisions',{exact:true}).click();await expect(page.getByText('Desired: '+newer)).toBeVisible();await expect(page.getByText('Running: '+rev)).toBeVisible();
  await page.getByRole('button',{name:'Stage settings',exact:true}).click();await expect.poll(()=>calls.find(c=>c.endpoint==='pcs/desk/apply')?.body).toEqual({expected_desired_revision:newer});
  expect(calls.find(c=>c.endpoint==='pcs/desk/apply').headers['x-wolf-csrf']).toBe('bound-csrf');await expect(page.getByText('Service: running', {exact:true})).toBeVisible();
 });
@@ -59,7 +66,7 @@ test('fingerprint enrollment requires explicit confirmation and logs are bounded
  const calls=await fixture(page);await page.getByRole('button',{name:'SSH setup'}).click();await page.getByRole('button',{name:'Probe host key'}).click();
  await expect(page.getByRole('button',{name:'Trust fingerprint'})).toBeDisabled();await page.getByRole('checkbox',{name:'I verified this fingerprint independently'}).check();await page.getByRole('button',{name:'Trust fingerprint'}).click();
  expect(calls.find(c=>c.endpoint.endsWith('/ssh/enroll')).body).toEqual({probe_id:'fixture-probe',fingerprint:'SHA256:fixture'});
- await page.getByRole('button',{name:'Cancel'}).click();await page.getByRole('button',{name:'Read logs'}).click();await expect(page.getByText('bounded fixture log')).toBeVisible();expect(calls.find(c=>c.endpoint.endsWith('/logs')).endpoint).toBe('pcs/desk/logs');
+ await page.getByRole('button',{name:'Cancel'}).click();await page.getByText('Diagnostics',{exact:true}).click();await page.getByRole('button',{name:'Read logs'}).click();await expect(page.getByText('bounded fixture log')).toBeVisible();expect(calls.find(c=>c.endpoint.endsWith('/logs')).endpoint).toBe('pcs/desk/logs');
 });
 test('PC identity isolates identical app IDs and unavailable catalog remains visible',async({page})=>{
  await fixture(page);await page.getByRole('button',{name:'Lounge',exact:true}).click();await expect(page.getByRole('heading',{name:'Lounge game'})).toBeVisible();await expect(page.getByText('Catalog is stale; last known games are preserved.')).toBeVisible();
@@ -75,9 +82,9 @@ test('bootstrap bearer token stays in memory and new PC onboarding uses closed e
  expect(calls.find(c=>c.endpoint==='pcs'&&c.method==='POST').body).toEqual({pc_id:'study',display_name:'Study',ssh_host:'192.0.2.3',ssh_port:22,ssh_user:'wolf-manager'});
 });
 test('uncertain operation reconciliation remains uncertain and log failure is recoverable',async({page})=>{
- const calls=await fixture(page);await page.getByRole('button',{name:'Reconcile operation'}).click();await expect(page.getByText('Resolution: unknown_interrupted')).toBeVisible();
+ const calls=await fixture(page);await page.getByText('Operation history',{exact:true}).click();await page.getByRole('button',{name:'Reconcile operation'}).click();await expect(page.getByText('Resolution: unknown_interrupted')).toBeVisible();
  await page.route('**/api/v1/pcs/desk/logs?lines=100',route=>route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:{code:'host_unavailable',message:'Host unavailable'}})}));
- await page.getByRole('button',{name:'Read logs'}).click();await expect(page.getByRole('alert')).toContainText('Host unavailable');await expect(page.getByRole('button',{name:'Read logs'})).toBeEnabled();
+ await page.getByText('Diagnostics',{exact:true}).click();await page.getByRole('button',{name:'Read logs'}).click();await expect(page.getByRole('alert')).toContainText('Host unavailable');await expect(page.getByRole('button',{name:'Read logs'})).toBeEnabled();
  expect(calls.find(c=>c.endpoint.endsWith('/reconcile')).body).toEqual({});
 });
 test('expired CSRF renews protection without automatically replaying a mutation',async({page})=>{
@@ -115,7 +122,7 @@ test('password change uses current session protection and returns to login',asyn
 });
 test('debug setting and parameter deletion use canonical routes and surface reference conflicts',async({page})=>{
  const calls=await fixture(page);await page.getByRole('checkbox',{name:'Diagnostic test ball'}).check();await page.getByRole('button',{name:'Save diagnostic setting'}).click();expect(calls.find(c=>c.endpoint==='settings/debug').body).toEqual({test_ball:true});
- await page.route('**/api/v1/parameters/fsr4',route=>route.fulfill({status:409,contentType:'application/json',body:JSON.stringify({error:{code:'parameter_in_use',message:'Parameter still referenced'}})}));await page.getByRole('button',{name:'Delete FSR4'}).click();await expect(page.getByRole('alert')).toContainText('Parameter still referenced');await expect(page.getByRole('checkbox',{name:'FSR4',exact:true})).toBeVisible();
+ await page.route('**/api/v1/parameters/fsr4',route=>route.fulfill({status:409,contentType:'application/json',body:JSON.stringify({error:{code:'parameter_in_use',message:'Parameter still referenced'}})}));await page.getByRole('button',{name:'Delete FSR4'}).click();await expect(page.getByRole('alert')).toContainText('Parameter still referenced');await page.getByText('Game settings',{exact:true}).click();await expect(page.getByRole('checkbox',{name:'FSR4',exact:true})).toBeVisible();
 });
 test('Ingress denial never falls back to standalone password authentication',async({page})=>{
  await page.route('http://wolf.test/**',async route=>{
@@ -132,5 +139,57 @@ test('unread global debug state cannot be changed through a fabricated false def
 });
 test('offline host status explicitly preserves last-known service and revision observations',async({page})=>{
  await fixture(page);await page.route('**/api/v1/pcs/desk/status',route=>route.fulfill({contentType:'application/json',body:JSON.stringify({status:{systemd_state:'active',container_state:'running',restart_count:0,exit_code:null,staged_revision:rev,running_revision:rev,recovery_pending:false},capabilities:{version:1,pc_id:'desk',ready:true,proton_cachyos:false,reasons:[]},availability:'offline',observed_at:1})}));await page.getByRole('button',{name:'Refresh',exact:true}).click();
- await expect(page.getByText('Host availability: offline', {exact:true})).toBeVisible();await expect(page.getByText('Last known service: running',{exact:true})).toBeVisible();await expect(page.getByText('Service: running',{exact:true})).toHaveCount(0);await expect(page.getByText('Last known running: '+rev,{exact:true})).toBeVisible();await expect(page.getByText('Observed at:',{exact:false})).toBeVisible();
+ await expect(page.getByText('Host availability: offline', {exact:true})).toBeVisible();await expect(page.getByText('Last known service: running',{exact:true})).toBeVisible();await expect(page.getByText('Service: running',{exact:true})).toHaveCount(0);await page.getByText('Configuration revisions',{exact:true}).click();await expect(page.getByText('Last known running: '+rev,{exact:true})).toBeVisible();await expect(page.getByText('Observed at:',{exact:false})).toBeVisible();
+});
+test('compact library expands settings by keyboard and preserves parameter removal',async({page})=>{
+ const calls=await fixture(page);const disclosure=page.getByText('Game settings',{exact:true});
+ await expect(page.getByRole('checkbox',{name:'Direct launch'})).not.toBeVisible();await disclosure.focus();await page.keyboard.press('Enter');
+ await page.getByRole('checkbox',{name:'FSR4',exact:true}).check();await page.getByRole('checkbox',{name:'FSR4',exact:true}).uncheck();await page.getByRole('button',{name:'Save game settings'}).click();
+ expect(calls.find(c=>c.endpoint==='pcs/desk/games/570/settings').body.parameters).toEqual([]);
+ await expect(page.getByRole('checkbox',{name:'Direct launch'})).not.toBeVisible();
+});
+test('PC edit retains immutable identity and archive requires confirmation',async({page})=>{
+ const calls=await fixture(page);await page.getByRole('button',{name:'Edit PC'}).click();await expect(page.getByLabel('PC ID')).toBeDisabled();
+ await page.getByLabel('Display name').fill('Renamed desktop');await page.getByLabel('SSH host').fill('192.0.2.42');await page.getByRole('button',{name:'Save PC',exact:true}).click();
+ expect(calls.find(c=>c.endpoint==='pcs/desk'&&c.method==='PATCH').body).toEqual({display_name:'Renamed desktop',ssh_host:'192.0.2.42',ssh_port:22,ssh_user:'wolf-manager'});
+ await page.getByRole('button',{name:'Edit PC'}).click();page.once('dialog',dialog=>dialog.dismiss());await page.getByRole('button',{name:'Archive PC'}).click();expect(calls.some(c=>c.method==='DELETE')).toBe(false);
+ page.once('dialog',dialog=>dialog.accept());await page.getByRole('button',{name:'Archive PC'}).click();expect(calls.find(c=>c.method==='DELETE').endpoint).toBe('pcs/desk');await expect(page.getByRole('dialog')).toHaveCount(0);
+});
+test('parameter edit retains ID and successful deletion refreshes configuration',async({page})=>{
+ const calls=await fixture(page);await page.getByRole('button',{name:'Edit FSR4'}).click();await expect(page.getByLabel('Parameter ID')).toBeDisabled();await page.getByLabel('Description').fill('Updated compatibility preset');await page.getByRole('button',{name:'Save parameter'}).click();
+ expect(calls.find(c=>c.endpoint==='parameters/fsr4'&&c.method==='PUT').body.description).toBe('Updated compatibility preset');await page.getByRole('button',{name:'Delete FSR4'}).click();expect(calls.some(c=>c.endpoint==='parameters/fsr4'&&c.method==='DELETE')).toBe(true);
+});
+test('diagnostic line bounds refuse network submission and valid snapshot stays readable',async({page})=>{
+ const calls=await fixture(page);await page.getByText('Diagnostics',{exact:true}).click();await page.getByLabel('Log lines').fill('501');await page.getByRole('button',{name:'Read logs'}).click();await expect(page.getByRole('alert')).toContainText('Choose 1 to 500 log lines.');expect(calls.some(c=>c.endpoint.endsWith('/logs'))).toBe(false);
+ await page.getByLabel('Log lines').fill('25');await page.route('**/api/v1/pcs/desk/logs?lines=25',route=>route.fulfill({contentType:'application/json',body:JSON.stringify({lines:'plain bounded snapshot',truncated:false})}));await page.getByRole('button',{name:'Read logs'}).click();await expect(page.getByText('plain bounded snapshot')).toBeVisible();await expect(page.getByText('Bounded snapshot; refresh explicitly for newer logs.')).toBeVisible();
+});
+test('recovery observation disables revision-sensitive controls while diagnostics remain available',async({page})=>{
+ await fixture(page);await page.route('**/api/v1/pcs/desk/status',route=>route.fulfill({contentType:'application/json',body:JSON.stringify({status:{container_state:'stopped',recovery_pending:true},capabilities:{ready:true,proton_cachyos:true},availability:'online',observed_at:null})}));await page.getByRole('button',{name:'Refresh',exact:true}).click();
+ for(const name of ['Start','Restart','Stage settings'])await expect(page.getByRole('button',{name,exact:true})).toBeDisabled();await expect(page.getByRole('button',{name:'Stop',exact:true})).toBeEnabled();await expect(page.getByText('Recovery pending.',{exact:false})).toBeVisible();await expect(page.getByText('Observed at: unknown')).toBeVisible();
+});
+test('missing host and catalog observations never imply an empty current host',async({page})=>{
+ await fixture(page);await page.route('**/api/v1/pcs/desk/status',route=>route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:{code:'host_unavailable',message:'Host unavailable'}})}));await page.route('**/api/v1/pcs/desk/games',route=>route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:{code:'host_unavailable',message:'Host unavailable'}})}));await page.getByRole('button',{name:'Refresh',exact:true}).click();
+ await expect(page.getByText('No current host observation. Controls require a verified host.')).toBeVisible();await expect(page.getByText('Catalog unavailable. No empty catalog is inferred.')).toBeVisible();await expect(page.getByRole('button',{name:'Stop',exact:true})).toBeDisabled();
+});
+test('operation pagination is explicit and exposes empty history without replay',async({page})=>{
+ const calls=await fixture(page);await page.route('**/api/v1/pcs/desk/operations?limit=20',route=>route.fulfill({contentType:'application/json',body:JSON.stringify({operations:[{operation_id:'test-complete',kind:'start',state:'completed',submitted_at:1,sanitized_result:{ok:true}}],next_cursor:'older cursor'})}));await page.route('**/api/v1/pcs/desk/operations?limit=20&cursor=older%20cursor',route=>route.fulfill({contentType:'application/json',body:JSON.stringify({operations:[],next_cursor:null})}));await page.getByRole('button',{name:'Refresh',exact:true}).click();await page.getByText('Operation history',{exact:true}).click();await expect(page.getByText('start · completed')).toBeVisible();await page.getByRole('button',{name:'Next operations'}).click();await expect(page.getByText('No operations yet.')).toBeVisible();expect(calls.some(c=>c.endpoint.includes('/service/'))).toBe(false);
+});
+test('empty host list gives an actionable onboarding screen and unavailable history is disclosed',async({page})=>{
+ await fixture(page);await page.route('**/api/v1/pcs',route=>route.fulfill({contentType:'application/json',body:JSON.stringify({pcs:[]})}));await page.reload();await expect(page.getByText('Add a PC to get started.')).toBeVisible();await page.getByRole('button',{name:'Add PC'}).click();await expect(page.getByLabel('PC ID')).toBeFocused();await page.keyboard.press('Escape');
+});
+test('reduced motion and narrow viewport keep operational and dialog controls reachable',async({page})=>{
+ await page.emulateMedia({reducedMotion:'reduce'});await page.setViewportSize({width:320,height:640});await fixture(page);expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);await page.getByRole('button',{name:'SSH setup'}).click();await expect(page.getByRole('dialog')).toBeVisible();expect(await page.getByRole('dialog').evaluate(n=>n.scrollWidth<=n.clientWidth)).toBe(true);await page.keyboard.press('Escape');await expect(page.getByRole('button',{name:'SSH setup'})).toBeFocused();
+});
+test('rejected settings and onboarding mutations surface errors and keep drafts editable',async({page})=>{
+ await fixture(page);await page.getByText('Game settings',{exact:true}).click();await page.route('**/api/v1/pcs/desk/games/570/settings',route=>route.fulfill({status:409,contentType:'application/json',body:JSON.stringify({error:{code:'stale_revision',message:'Refresh settings before saving'}})}));await page.getByRole('button',{name:'Save game settings'}).click();await expect(page.getByRole('alert')).toContainText('Refresh settings before saving');await expect(page.getByRole('button',{name:'Save game settings'})).toBeEnabled();
+ await page.getByRole('button',{name:'Add PC'}).click();await page.getByLabel('PC ID').fill('new-host');await page.getByLabel('Display name').fill('New host');await page.getByLabel('SSH host').fill('192.0.2.9');await page.route('**/api/v1/pcs',route=>route.fulfill({status:409,contentType:'application/json',body:JSON.stringify({error:{code:'conflict',message:'PC already exists'}})}));await page.getByRole('button',{name:'Save PC',exact:true}).click();await expect(page.getByRole('dialog').getByRole('alert')).toContainText('PC already exists');await expect(page.getByLabel('Display name')).toHaveValue('New host');await page.keyboard.press('Escape');
+});
+test('failed login clears submitted password and remains on the sign-in screen',async({page})=>{
+ await fixture(page,'standalone');await page.route('**/api/v1/auth/login',route=>route.fulfill({status:401,contentType:'application/json',body:JSON.stringify({error:{code:'invalid_credentials',message:'Password was not accepted'}})}));await page.getByLabel('Password',{exact:true}).fill('invalid-test-password');await page.getByRole('button',{name:'Sign in',exact:true}).click();await expect(page.getByRole('alert')).toContainText('Password was not accepted');await expect(page.getByLabel('Password',{exact:true})).toHaveValue('');await expect(page.getByRole('button',{name:'Sign in',exact:true})).toBeEnabled();
+});
+test('expired standalone session returns to authentication without resubmitting service control',async({page})=>{
+ await fixture(page,'standalone');await page.getByLabel('Password',{exact:true}).fill('test-password');await page.getByRole('button',{name:'Sign in',exact:true}).click();let submissions=0;await page.route('**/api/v1/pcs/desk/service/start',route=>{submissions++;return route.fulfill({status:401,contentType:'application/json',body:JSON.stringify({error:{code:'unauthenticated',message:'Session expired'}})});});await page.getByRole('button',{name:'Start',exact:true}).click();await expect(page.getByRole('button',{name:'Sign in',exact:true})).toBeVisible();expect(submissions).toBe(1);await expect(page.getByRole('button',{name:'Start',exact:true})).toHaveCount(0);
+});
+test('history failure remains visible within its disclosure and empty catalog is explicit',async({page})=>{
+ await fixture(page);await page.route('**/api/v1/pcs/desk/operations?limit=20',route=>route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:{code:'storage_unavailable',message:'History unavailable'}})}));await page.route('**/api/v1/pcs/desk/games',route=>route.fulfill({contentType:'application/json',body:JSON.stringify({games:[],availability:'online',catalog_generation:3})}));await page.getByRole('button',{name:'Refresh',exact:true}).click();await expect(page.getByText('No games in the last complete catalog.')).toBeVisible();await page.getByText('Operation history',{exact:true}).click();await expect(page.getByText('Operation history unavailable.')).toBeVisible();
 });
