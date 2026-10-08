@@ -115,3 +115,26 @@ fn rolled_back_counter_refuses_new_generation() {
     fs::write(c.state_directory.join("generation"), "0").unwrap();
     assert!(scan(&c, 2).is_err());
 }
+
+#[test]
+fn lifecycle_inventory_is_read_only_and_needs_no_catalog_state_access() {
+    let (_t, mut c) = fixture();
+    manifest(&c, "12", "Game", "4");
+    let snapshot = scan(&c, 1).unwrap();
+    let before = fs::read(c.state_directory.join("accepted.json")).unwrap();
+    let inventory = wolf_manager_host::catalog::inventory(&c, 2).unwrap();
+    assert_eq!(inventory.len(), 1);
+    assert_eq!(
+        fs::read(c.state_directory.join("accepted.json")).unwrap(),
+        before
+    );
+    assert_eq!(
+        scan(&c, 3).unwrap().manifest.catalog_generation,
+        snapshot.manifest.catalog_generation + 1
+    );
+    c.state_directory = "/nonexistent/private/catalog".into();
+    assert_eq!(
+        wolf_manager_host::catalog::inventory(&c, 4).unwrap().len(),
+        1
+    );
+}

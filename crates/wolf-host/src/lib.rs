@@ -17,3 +17,15 @@ pub mod hooks;
 pub mod quiescence;
 
 pub mod state;
+
+pub mod lifecycle;
+
+mod commands;
+
+pub mod rpc;
+
+pub mod host_status;
+pub mod host_runtime;
+pub mod host_steam;
+pub mod cli;
+pub mod catalog_daemon;

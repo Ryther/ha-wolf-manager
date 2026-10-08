@@ -170,98 +170,7 @@ pub fn scan(config: &CatalogConfig, observed_at_ms: i64) -> io::Result<Snapshot>
         return Err(invalid());
     }
     lock.lock_exclusive()?;
-    let mut found = BTreeMap::new();
-    let mut libraries = std::collections::BTreeSet::new();
-    let mut count = 0;
-    for library in &config.libraries {
-        if library.library_id.is_empty()
-            || library.library_id.len() > 256
-            || !libraries.insert(&library.library_id)
-        {
-            return Err(invalid());
-        }
-        let dir = root(&library.canonical_path)?;
-        let identity = dir.metadata()?;
-        let mut paths = fs::read_dir(&library.canonical_path)?
-            .take(50001)
-            .map(|e| e.map(|e| e.file_name()))
-            .collect::<io::Result<Vec<_>>>()?;
-        if paths.len() > 50000 {
-            return Err(invalid());
-        }
-        paths.sort();
-        for name in paths {
-            let Some(name) = name.to_str() else {
-                return Err(invalid());
-            };
-            if !name.starts_with("appmanifest_") || !name.ends_with(".acf") {
-                continue;
-            }
-            count += 1;
-            if count > 10000 {
-                return Err(invalid());
-            }
-            let text = read_bounded(anchored(&dir, Path::new(name), false)?)?;
-            let doc = crate::vdf::Document::parse(&text)?;
-            let get = |field| doc.get(&["AppState", field]);
-            let id = get("appid")?.ok_or_else(invalid)?;
-            let app = AppId::new(&id).map_err(|_| invalid())?;
-            if name != format!("appmanifest_{id}.acf") {
-                return Err(invalid());
-            }
-            let cleaned = clean_game_name(&get("name")?.ok_or_else(invalid)?);
-            let install = get("installdir")?.ok_or_else(invalid)?;
-            let flags = get("StateFlags")?.unwrap_or_default();
-            if cleaned.is_empty()
-                || [
-                    "proton",
-                    "steam linux runtime",
-                    "steamworks common redistributables",
-                ]
-                .iter()
-                .any(|p| cleaned.to_lowercase().contains(p))
-                || (!flags.is_empty() && flags != "4")
-            {
-                continue;
-            }
-            if install.is_empty()
-                || Path::new(&install)
-                    .components()
-                    .any(|c| !matches!(c, Component::Normal(_)))
-                || Path::new(&install).components().count() != 1
-            {
-                return Err(invalid());
-            }
-            match anchored(&dir, &Path::new("common").join(&install), true) {
-                Ok(_) => {}
-                Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
-                Err(e) => return Err(e),
-            };
-            let attr = CatalogAttributes {
-                version: 1,
-                pc_id: config.pc_id.clone(),
-                app_id: app.clone(),
-                name: cleaned,
-                cover_url: steam_cover_url(&app),
-                library_id: library.library_id.clone(),
-                catalog_generation: 0,
-                observed_at_ms,
-            };
-            attr.validate().map_err(|_| invalid())?;
-            if found.insert(app, attr).is_some() {
-                return Err(invalid());
-            }
-        }
-        let current = fs::symlink_metadata(&library.canonical_path)?;
-        if !current.is_dir()
-            || current.dev() != identity.dev()
-            || current.ino() != identity.ino()
-            || current.mtime() != identity.mtime()
-            || current.mtime_nsec() != identity.mtime_nsec()
-        {
-            return Err(invalid());
-        }
-    }
+    let mut found = inventory(config, observed_at_ms)?;
     let generation = match private_read(&config.state_directory.join("generation"))? {
         Some(s) => {
             let reserved = s.trim().parse::<u64>().map_err(|_| invalid())?;
@@ -402,4 +311,107 @@ pub fn record_published(config: &CatalogConfig, snapshot: &Snapshot) -> io::Resu
         &config.state_directory.join("published.json"),
         &serde_json::to_vec(snapshot)?,
     )
+}
+
+/// Read-only inventory for root lifecycle hooks; never advances published generations.
+pub fn inventory(
+    config: &CatalogConfig,
+    observed_at_ms: i64,
+) -> io::Result<BTreeMap<AppId, CatalogAttributes>> {
+    if observed_at_ms < 0 || config.libraries.is_empty() || config.libraries.len() > 64 {
+        return Err(invalid());
+    }
+    let mut found = BTreeMap::new();
+    let mut libraries = std::collections::BTreeSet::new();
+    let mut count = 0;
+    for library in &config.libraries {
+        if library.library_id.is_empty()
+            || library.library_id.len() > 256
+            || !libraries.insert(&library.library_id)
+        {
+            return Err(invalid());
+        }
+        let dir = root(&library.canonical_path)?;
+        let identity = dir.metadata()?;
+        let mut paths = fs::read_dir(&library.canonical_path)?
+            .take(50001)
+            .map(|e| e.map(|e| e.file_name()))
+            .collect::<io::Result<Vec<_>>>()?;
+        if paths.len() > 50000 {
+            return Err(invalid());
+        }
+        paths.sort();
+        for name in paths {
+            let Some(name) = name.to_str() else {
+                return Err(invalid());
+            };
+            if !name.starts_with("appmanifest_") || !name.ends_with(".acf") {
+                continue;
+            }
+            count += 1;
+            if count > 10000 {
+                return Err(invalid());
+            }
+            let text = read_bounded(anchored(&dir, Path::new(name), false)?)?;
+            let doc = crate::vdf::Document::parse(&text)?;
+            let get = |field| doc.get(&["AppState", field]);
+            let id = get("appid")?.ok_or_else(invalid)?;
+            let app = AppId::new(&id).map_err(|_| invalid())?;
+            if name != format!("appmanifest_{id}.acf") {
+                return Err(invalid());
+            }
+            let cleaned = clean_game_name(&get("name")?.ok_or_else(invalid)?);
+            let install = get("installdir")?.ok_or_else(invalid)?;
+            let flags = get("StateFlags")?.unwrap_or_default();
+            if cleaned.is_empty()
+                || [
+                    "proton",
+                    "steam linux runtime",
+                    "steamworks common redistributables",
+                ]
+                .iter()
+                .any(|p| cleaned.to_lowercase().contains(p))
+                || (!flags.is_empty() && flags != "4")
+            {
+                continue;
+            }
+            if install.is_empty()
+                || Path::new(&install)
+                    .components()
+                    .any(|c| !matches!(c, Component::Normal(_)))
+                || Path::new(&install).components().count() != 1
+            {
+                return Err(invalid());
+            }
+            match anchored(&dir, &Path::new("common").join(&install), true) {
+                Ok(_) => {}
+                Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e),
+            };
+            let attr = CatalogAttributes {
+                version: 1,
+                pc_id: config.pc_id.clone(),
+                app_id: app.clone(),
+                name: cleaned,
+                cover_url: steam_cover_url(&app),
+                library_id: library.library_id.clone(),
+                catalog_generation: 0,
+                observed_at_ms,
+            };
+            attr.validate().map_err(|_| invalid())?;
+            if found.insert(app, attr).is_some() {
+                return Err(invalid());
+            }
+        }
+        let current = fs::symlink_metadata(&library.canonical_path)?;
+        if !current.is_dir()
+            || current.dev() != identity.dev()
+            || current.ino() != identity.ino()
+            || current.mtime() != identity.mtime()
+            || current.mtime_nsec() != identity.mtime_nsec()
+        {
+            return Err(invalid());
+        }
+    }
+    Ok(found)
 }
