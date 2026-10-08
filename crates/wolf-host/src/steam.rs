@@ -193,3 +193,40 @@ pub fn generated_sections(original: &str, moonlight: &str, user: &str) -> io::Re
     result.parse::<toml::Table>().map_err(|_| invalid())?;
     Ok(result)
 }
+
+pub fn libraryfolders(
+    original: &str,
+    libraries: &[(String, String, Vec<wolf_core::AppId>)],
+) -> io::Result<String> {
+    let mut doc = Document::parse(original)?;
+    let mut mapping = std::collections::BTreeSet::new();
+    for (host, container, apps) in libraries {
+        if !host.starts_with('/') || !container.starts_with('/') || !mapping.insert(host) {
+            return Err(invalid());
+        }
+        let keys = doc.keys(&["libraryfolders"])?;
+        let mut chosen = None;
+        let mut next = 0u64;
+        for key in keys {
+            let index = key.parse::<u64>().map_err(|_| invalid())?;
+            next = next.max(index.checked_add(1).ok_or_else(invalid)?);
+            if let Some(path) = doc.get(&["libraryfolders", &key, "path"])?
+                && (path == *host || path == *container)
+            {
+                if chosen.is_some() {
+                    return Err(invalid());
+                }
+                chosen = Some(key);
+            }
+        }
+        let key = chosen.unwrap_or_else(|| next.to_string());
+        doc.set(&["libraryfolders", &key, "path"], container)?;
+        for app in apps {
+            let path = ["libraryfolders", &key, "apps", app.as_str()];
+            if doc.get(&path)?.is_none() {
+                doc.set(&path, "0")?;
+            }
+        }
+    }
+    Ok(doc.text().to_owned())
+}

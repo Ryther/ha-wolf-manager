@@ -327,3 +327,40 @@ fn parent_symlink_after_apply_is_durable_recovery_conflict() {
         b"managed"
     );
 }
+
+#[test]
+fn pinned_read_rejects_aliases_and_preserves_exact_bytes() {
+    let root = tempdir().unwrap();
+    fs::write(root.path().join("config"), b"exact bytes").unwrap();
+    symlink("config", root.path().join("alias")).unwrap();
+    let grant = Grant::open(root.path()).unwrap();
+    assert_eq!(grant.read("config").unwrap(), b"exact bytes");
+    assert!(grant.read("alias").is_err());
+    assert!(grant.read("../config").is_err());
+}
+
+#[test]
+fn permanent_owned_section_commit_keeps_backup_without_scheduling_steam_restore() {
+    let root = tempdir().unwrap();
+    let backups = tempdir().unwrap();
+    fs::set_permissions(backups.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    fs::write(root.path().join("wolf.toml"), b"pairing = 'keep'\n").unwrap();
+    let grant = Grant::open(root.path()).unwrap();
+    let store = TransactionStore::open(backups.path()).unwrap();
+    let id = store
+        .apply(&grant, "wolf.toml", b"pairing = 'keep'\n# generated apps\n")
+        .unwrap();
+    store.commit(&grant, &id).unwrap();
+    assert!(store.active().unwrap().is_empty());
+    assert_eq!(store.preimage(&id).unwrap(), b"pairing = 'keep'\n");
+    fs::write(
+        root.path().join("wolf.toml"),
+        b"pairing = 'new legitimate pairing'\n# generated apps\n",
+    )
+    .unwrap();
+    assert!(store.restore(&grant, &id).is_err());
+    assert_eq!(
+        grant.read("wolf.toml").unwrap(),
+        b"pairing = 'new legitimate pairing'\n# generated apps\n"
+    );
+}

@@ -185,6 +185,30 @@ impl Document {
             root,
         })
     }
+    /// Enumerate object keys without normalizing or rewriting unrelated text.
+    pub fn keys(&self, path: &[&str]) -> io::Result<Vec<String>> {
+        let mut object = &self.root;
+        for key in path {
+            let Some(entry) = find(object, key)? else {
+                return Ok(vec![]);
+            };
+            let Value::Object(child) = &entry.value else {
+                return Err(invalid());
+            };
+            object = child;
+        }
+        let mut unique = std::collections::BTreeSet::new();
+        for entry in &object.entries {
+            if !unique.insert(entry.key.to_ascii_lowercase()) {
+                return Err(invalid());
+            }
+        }
+        Ok(object
+            .entries
+            .iter()
+            .map(|entry| entry.key.clone())
+            .collect())
+    }
     pub fn get(&self, path: &[&str]) -> io::Result<Option<String>> {
         if path.is_empty() {
             return Err(invalid());

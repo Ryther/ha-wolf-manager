@@ -149,3 +149,33 @@ fn absent_markers_place_apps_in_their_correct_existing_profiles() {
     assert_eq!(titles(0), vec!["Wolf UI", "Diagnostic"]);
     assert_eq!(titles(1), vec!["Custom game", "Managed game"]);
 }
+
+#[test]
+fn library_mapping_merges_apps_without_losing_unmanaged_libraries() {
+    let original = "// operator metadata\n\"libraryfolders\" { \"0\" { \"path\" \"/host/main\" \"label\" \"Keep\" \"apps\" { \"99\" \"old-build\" } } \"7\" { \"path\" \"/unrelated\" \"custom\" \"keep\" } }";
+    let mapping = vec![(
+        "/host/main".into(),
+        "/container/main".into(),
+        vec![AppId::new("42").unwrap()],
+    )];
+    let updated = steam::libraryfolders(original, &mapping).unwrap();
+    let doc = Document::parse(&updated).unwrap();
+    assert!(updated.starts_with("// operator metadata"));
+    assert_eq!(
+        doc.get(&["libraryfolders", "0", "path"]).unwrap(),
+        Some("/container/main".into())
+    );
+    assert_eq!(
+        doc.get(&["libraryfolders", "0", "apps", "99"]).unwrap(),
+        Some("old-build".into())
+    );
+    assert_eq!(
+        doc.get(&["libraryfolders", "0", "apps", "42"]).unwrap(),
+        Some("0".into())
+    );
+    assert_eq!(
+        doc.get(&["libraryfolders", "7", "custom"]).unwrap(),
+        Some("keep".into())
+    );
+    assert_eq!(steam::libraryfolders(&updated, &mapping).unwrap(), updated);
+}

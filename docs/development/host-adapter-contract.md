@@ -11,3 +11,9 @@ Installer API: InstallMode::{Install,Adopt}; InstallRequest {mode,policy,authori
 Installed fixed wrappers/units consume wolf-manager-host CLI subcommands dispatch-rpc, privileged-rpc, apply-steam, restore-steam, lifecycle-start, lifecycle-stop, catalog-daemon. Dispatcher/helper wrapper has no arguments from SSH; original command must equal wolf-manager-rpc-v1. Separate admission and transaction locks prevent systemd hook deadlocks. Systemd lifecycle hooks and privilege syntax are verified in disposable fixtures, with actual OS/systemd evidence recorded separately.
 
 The selected catalog worker owns only catalog.rs/catalog_mqtt.rs and tests. Root owns lib exports, policy integration, CLI/lifecycle/Steam hooks and shared metadata. Installer worker owns policy.rs/install.rs, their tests and installer/templates. Metadata, docs/checklists, Cargo.lock and vendored source attribution remain central.
+
+## Implemented lock and configuration semantics
+
+The host journal serializes privileged mutations with `backup_root/requests/.admission.lock`; installer activation uses that exact lock. This supersedes the earlier illustrative `/run/wolf-manager/rpc.lock` location. Steam hooks use distinct `.hooks.lock` and `.transaction.lock` inside `backup_root` and must never acquire the admission lock while systemd waits for them.
+
+Temporary Steam overlays remain active until verified restoration. Wolf managed app blocks use a guarded permanent commit of a verified postimage after the preimage is durably backed up. Committed transactions remain available for explicit recovery but are excluded from automatic Steam restoration. On stop, managed block edits operate on the current Wolf TOML so new pairing data and custom apps remain intact. Full-file restore refuses drift. Runtime integration and pairing-during-session evidence remain required.

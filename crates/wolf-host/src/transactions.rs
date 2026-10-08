@@ -67,6 +67,29 @@ pub struct Grant {
     inode: u64,
 }
 impl Grant {
+    pub fn read(&self, relative: &str) -> io::Result<Vec<u8>> {
+        let (parent, name) = self.parent(relative)?;
+        let before = parent.metadata()?;
+        let first = self.read_file(&parent, &name)?;
+        let second = self.read_file(&parent, &name)?;
+        let (fresh, _) = self.parent(relative)?;
+        let after = fresh.metadata()?;
+        if before.dev() != after.dev()
+            || before.ino() != after.ino()
+            || first.0 != second.0
+            || first.1.ino() != second.1.ino()
+            || first.1.dev() != second.1.dev()
+            || first.1.mtime() != second.1.mtime()
+            || first.1.mtime_nsec() != second.1.mtime_nsec()
+            || first.1.ctime() != second.1.ctime()
+            || first.1.ctime_nsec() != second.1.ctime_nsec()
+            || first.2 != second.2
+        {
+            return Err(error("configuration changed during read"));
+        }
+        Ok(first.0)
+    }
+
     pub fn open(path: &Path) -> io::Result<Self> {
         if !path.is_absolute() {
             return Err(error("grant must be absolute"));
@@ -203,6 +226,7 @@ enum Phase {
     Prepared,
     Quarantined,
     Applied,
+    Committed,
     Restoring,
     Restored,
     Conflict,
@@ -248,6 +272,14 @@ struct Envelope {
     checksum: String,
 }
 
+/// Recovery identity from an independently verified private manifest.
+pub struct ActiveTransaction {
+    pub id: Uuid,
+    pub root: PathBuf,
+    pub relative: String,
+    pub uid: u32,
+    pub gid: u32,
+}
 pub struct TransactionStore {
     root: PathBuf,
     directory: File,
@@ -265,6 +297,24 @@ impl TransactionStore {
             root: grant.root,
             directory: grant.directory,
         })
+    }
+    pub(crate) fn hook_lock(&self) -> io::Result<File> {
+        let file = File::from(rustix::fs::openat(
+            &self.directory,
+            ".hooks.lock",
+            OFlags::RDWR | OFlags::CREATE | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::from_raw_mode(0o600),
+        )?);
+        let metadata = file.metadata()?;
+        if !metadata.is_file()
+            || metadata.nlink() != 1
+            || metadata.uid() != rustix::process::geteuid().as_raw()
+            || metadata.mode() & 0o077 != 0
+        {
+            return Err(error("unsafe hook lock"));
+        }
+        file.try_lock_exclusive()?;
+        Ok(file)
     }
     fn lock(&self) -> io::Result<File> {
         let file = File::from(rustix::fs::openat(
@@ -359,6 +409,22 @@ impl TransactionStore {
         ids.sort();
         Ok(ids)
     }
+    pub fn active(&self) -> io::Result<Vec<ActiveTransaction>> {
+        let mut active = Vec::new();
+        for id in self.transactions()? {
+            let manifest = self.load(&id)?;
+            if !matches!(manifest.phase, Phase::Restored | Phase::Committed) {
+                active.push(ActiveTransaction {
+                    id,
+                    root: manifest.root,
+                    relative: manifest.relative,
+                    uid: manifest.uid,
+                    gid: manifest.gid,
+                });
+            }
+        }
+        Ok(active)
+    }
     pub fn recovery_pending(&self) -> io::Result<bool> {
         for id in self.transactions()? {
             if matches!(
@@ -406,7 +472,7 @@ impl TransactionStore {
             let previous = self.load(&id)?;
             if previous.root == grant.root
                 && previous.relative == relative
-                && previous.phase != Phase::Restored
+                && !matches!(previous.phase, Phase::Restored | Phase::Committed)
             {
                 return Err(error("target already has an active transaction"));
             }
@@ -480,6 +546,31 @@ impl TransactionStore {
         manifest.phase = Phase::Applied;
         self.save(&manifest)?;
         Ok(id)
+    }
+    /// Keep a verified owned-section update permanently while retaining its preimage.
+    /// Only root lifecycle code uses this for Wolf TOML, never temporary Steam writes.
+    pub fn commit(&self, grant: &Grant, id: &Uuid) -> io::Result<()> {
+        let _lock = self.lock()?;
+        let mut manifest = self.load(id)?;
+        if manifest.root != grant.root
+            || manifest.root_device != grant.device
+            || manifest.root_inode != grant.inode
+            || manifest.uid != grant.uid
+            || manifest.gid != grant.gid
+            || !matches!(manifest.phase, Phase::Applied | Phase::Committed)
+        {
+            return Err(error("commit grant or phase mismatch"));
+        }
+        self.preimage(id)?;
+        self.require_parent(&mut manifest, grant)?;
+        let (parent, name) = grant.parent(&manifest.relative)?;
+        let snapshot = grant.read_file(&parent, &name)?;
+        if !manifest.matches(&snapshot, &manifest.postimage_sha256) {
+            return Err(error("commit postimage changed"));
+        }
+        self.require_parent(&mut manifest, grant)?;
+        manifest.phase = Phase::Committed;
+        self.save(&manifest)
     }
     pub fn restore(&self, grant: &Grant, id: &Uuid) -> io::Result<()> {
         let _lock = self.lock()?;
