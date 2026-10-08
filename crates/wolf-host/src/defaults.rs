@@ -6,6 +6,15 @@ const WOLF_CONFIG: &str = include_str!("../../../installer/vendor/wolf/config.v7
 /// The caller's policy defines the persistent configuration mapping.
 pub fn initial_files(policy: &RootPolicy) -> io::Result<Vec<InitialFile>> {
     policy.validate_structure()?;
+    // The verified upstream startup script overwrites WOLF_CFG_FILE with
+    // $HOST_APPS_STATE_FOLDER/cfg/config.toml. Refuse incompatible fresh layouts
+    // rather than silently starting a separate identity. Adoption bypasses this
+    // producer and preserves the operator's existing Compose contract.
+    if policy.wolf_config.relative_path != "cfg/config.toml" {
+        return Err(io::Error::other(
+            "fresh Wolf defaults require wolf_config.relative_path cfg/config.toml",
+        ));
+    }
     let mut files = Vec::new();
     let config_path = policy
         .wolf_config
@@ -29,8 +38,8 @@ pub fn initial_files(policy: &RootPolicy) -> io::Result<Vec<InitialFile>> {
         let compose = serde_json::json!({"services":{"wolf":{
          "image":policy.image_ref,"container_name":policy.container_name,
          "network_mode":"host","restart":"unless-stopped","pull_policy":"never",
-         "environment":{"WOLF_LOG_LEVEL":"DEBUG","GST_DEBUG":"3","WOLF_DEFAULT_RUN_UID":policy.steam_uid.to_string(),"WOLF_DEFAULT_RUN_GID":policy.steam_gid.to_string(),"WOLF_CFG_FILE":format!("/etc/wolf/{}",policy.wolf_config.relative_path)},
-         "volumes":[format!("{config}:/etc/wolf:rw"),"/var/run/docker.sock:/var/run/docker.sock:rw","/dev:/dev:rw","/run/udev:/run/udev:rw"],
+         "environment":{"WOLF_LOG_LEVEL":"DEBUG","GST_DEBUG":"3","WOLF_DEFAULT_RUN_UID":policy.steam_uid.to_string(),"WOLF_DEFAULT_RUN_GID":policy.steam_gid.to_string(),"HOST_APPS_STATE_FOLDER":config},
+         "volumes":[format!("{config}:{config}:rw"),"/var/run/docker.sock:/var/run/docker.sock:rw","/dev:/dev:rw","/run/udev:/run/udev:rw"],
          "devices":["/dev/dri:/dev/dri","/dev/uinput:/dev/uinput","/dev/uhid:/dev/uhid","/dev/fuse:/dev/fuse"],
          "device_cgroup_rules":["c 13:* rmw","c 226:* rmw","c 244:* rmw"]
         }}});
