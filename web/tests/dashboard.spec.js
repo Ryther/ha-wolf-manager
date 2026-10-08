@@ -126,3 +126,11 @@ test('Ingress denial never falls back to standalone password authentication',asy
 test('explicit refresh renews expiring CSRF protection as well as observations',async({page})=>{
  const calls=await fixture(page);await page.getByRole('button',{name:'Refresh',exact:true}).click();await expect.poll(()=>calls.filter(c=>c.endpoint==='auth/csrf').length).toBe(2);
 });
+test('unread global debug state cannot be changed through a fabricated false default',async({page})=>{
+ const calls=await fixture(page);await page.route('**/api/v1/pcs/desk/settings',route=>route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:{code:'host_unavailable',message:'Settings unavailable'}})}));await page.getByRole('button',{name:'Refresh',exact:true}).click();
+ await expect(page.getByText('Diagnostic setting unavailable until settings can be read.')).toBeVisible();await expect(page.getByRole('checkbox',{name:'Diagnostic test ball'})).toBeDisabled();await expect(page.getByRole('button',{name:'Save diagnostic setting'})).toBeDisabled();expect(calls.some(c=>c.endpoint==='settings/debug')).toBe(false);
+});
+test('offline host status explicitly preserves last-known service and revision observations',async({page})=>{
+ await fixture(page);await page.route('**/api/v1/pcs/desk/status',route=>route.fulfill({contentType:'application/json',body:JSON.stringify({status:{systemd_state:'active',container_state:'running',restart_count:0,exit_code:null,staged_revision:rev,running_revision:rev,recovery_pending:false},capabilities:{version:1,pc_id:'desk',ready:true,proton_cachyos:false,reasons:[]},availability:'offline',observed_at:1})}));await page.getByRole('button',{name:'Refresh',exact:true}).click();
+ await expect(page.getByText('Host availability: offline', {exact:true})).toBeVisible();await expect(page.getByText('Last known service: running',{exact:true})).toBeVisible();await expect(page.getByText('Service: running',{exact:true})).toHaveCount(0);await expect(page.getByText('Last known running: '+rev,{exact:true})).toBeVisible();await expect(page.getByText('Observed at:',{exact:false})).toBeVisible();
+});

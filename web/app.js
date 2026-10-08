@@ -160,11 +160,18 @@
     const service=node('section',null,{class:'panel'});
     append(service,append(node('div',null,{class:'row spread'}),node('h2',pc.display_name),append(node('div',null,{class:'row'}),button('Edit PC',()=>pcDialog(pc)),button('SSH setup',()=>sshDialog(pc)),button('Refresh',async()=>{await issueCsrf();await loadPc();}))));
     const observed=status?.status;
-    append(service,node('p','Service: '+(observed?.container_state||'unknown')));
+    const availability=status?.availability||'unknown';
+    const lastKnown=availability!=='online';
+    append(service,node('p','Host availability: '+availability),
+      node('p',(lastKnown?'Last known service: ':'Service: ')+(observed?.container_state||'unknown')));
+    const observedTime=status?.observed_at;
+    const date=Number.isFinite(observedTime)?new Date(observedTime):null;
+    service.append(node('p','Observed at: '+(date&&!Number.isNaN(date.getTime())?date.toISOString():'unknown'),{class:'muted'}));
+    if(lastKnown)service.append(node('p','Service state and observed revisions are last known; current host state is unavailable.',{class:'warning'}));
     if(!status)service.append(node('p','No current host observation. Controls require a verified host.',{class:'warning'}));
     if(observed?.recovery_pending)service.append(node('p','Recovery pending. Preserve current files and backups; inspect diagnostics before retrying.',{class:'warning'}));
     const revisions=node('div',null,{class:'revisions'});
-    append(revisions,node('p','Desired: '+(desired||'unknown')),node('p','Staged: '+(settings?.staged_revision||'unknown')),node('p','Running: '+(settings?.running_revision||'unknown')));service.append(revisions);
+    append(revisions,node('p','Desired: '+(desired||'unknown')),node('p',(lastKnown?'Last known staged: ':'Staged: ')+(settings?.staged_revision||'unknown')),node('p',(lastKnown?'Last known running: ':'Running: ')+(settings?.running_revision||'unknown')));service.append(revisions);
     const unavailable=!desired||!status?.capabilities?.ready||Boolean(observed?.recovery_pending);
     append(service,append(node('div',null,{class:'row'}),
       button('Stage settings',()=>queue(root+'apply',{expected_desired_revision:desired}),{disabled:unavailable}),
@@ -239,8 +246,10 @@
   }
   function configurationPanel(){
     const panel=node('section',null,{class:'panel'});append(panel,node('h2','Shared configuration'));
-    const debug=check('Diagnostic test ball',settings?.settings?.debug?.test_ball||false);
-    append(panel,debug.label,button('Save diagnostic setting',async()=>{await api('settings/debug',{method:'PUT',body:{test_ball:debug.input.checked}});notice('Diagnostic setting saved as desired configuration.');await loadPc();}));
+    const debugAvailable=typeof settings?.settings?.debug?.test_ball==='boolean';
+    const debug=check('Diagnostic test ball',debugAvailable?settings.settings.debug.test_ball:false,!debugAvailable);
+    if(!debugAvailable)panel.append(node('p','Diagnostic setting unavailable until settings can be read.',{class:'warning'}));
+    append(panel,debug.label,button('Save diagnostic setting',async()=>{await api('settings/debug',{method:'PUT',body:{test_ball:debug.input.checked}});notice('Diagnostic setting saved as desired configuration.');await loadPc();},{disabled:!debugAvailable}));
     const defs=node('div');for(const [id,d]of Object.entries(parameters)){
       const row=node('div',null,{class:'operation'});append(row,node('h3',d.label),node('p',d.description,{class:'muted'}),node('code',d.launch_options),append(node('div',null,{class:'row'}),button('Edit '+d.label,()=>parameterDialog(id,d)),button('Delete '+d.label,async()=>{await api('parameters/'+encodeURIComponent(id),{method:'DELETE'});await loadPc();})));
       defs.append(row);
