@@ -215,7 +215,7 @@ impl RootPolicy {
         }
         Ok(())
     }
-    pub fn validate(&self) -> io::Result<()> {
+    pub fn validate_install_prerequisites(&self) -> io::Result<()> {
         self.validate_structure()?;
         for library in &self.libraries {
             trusted_path(&library.steamapps_path, self.steam_uid, true)?;
@@ -238,6 +238,16 @@ impl RootPolicy {
                 true,
             )?;
         }
+        for path in &self.steam_executables {
+            trusted_path(path, self.steam_uid, false)?;
+        }
+        if let Some(proton) = &self.proton {
+            trusted_path(&proton.host_path, self.steam_uid, true)?;
+        }
+        Ok(())
+    }
+    pub fn validate(&self) -> io::Result<()> {
+        self.validate_install_prerequisites()?;
         trusted_path(
             &self.wolf_config.root.join(&self.wolf_config.relative_path),
             0,
@@ -251,17 +261,11 @@ impl RootPolicy {
             }
         }
         trusted_path(&self.catalog_state_directory, self.steam_uid, true)?;
-        for path in &self.steam_executables {
-            trusted_path(path, self.steam_uid, false)?;
-        }
         if let Some(path) = &self.broker_secret_file {
             trusted_path(path, self.steam_uid, false)?;
             if fs::metadata(path)?.mode() & 0o007 != 0 {
                 return Err(fail("broker secret must not be world readable"));
             }
-        }
-        if let Some(proton) = &self.proton {
-            trusted_path(&proton.host_path, self.steam_uid, true)?;
         }
         Ok(())
     }

@@ -28,6 +28,15 @@ pub enum InstallMode {
     Install,
     Adopt,
 }
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InitialFile {
+    pub path: PathBuf,
+    pub bytes: Vec<u8>,
+    pub uid: u32,
+    pub gid: u32,
+    pub mode: u32,
+}
 #[derive(Clone, Debug)]
 pub struct InstallRequest {
     pub mode: InstallMode,
@@ -35,6 +44,7 @@ pub struct InstallRequest {
     pub authorized_public_keys: Vec<String>,
     pub source_binary: PathBuf,
     pub broker_config_source: Option<PathBuf>,
+    pub initial_files: Vec<InitialFile>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -64,6 +74,40 @@ pub struct PlannedWrite {
     pub gid: u32,
     pub expected: Option<FileIdentity>,
 }
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DirectoryIdentity {
+    pub device: u64,
+    pub inode: u64,
+    pub uid: u32,
+    pub gid: u32,
+    pub mode: u32,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlannedDirectory {
+    pub path: PathBuf,
+    pub uid: u32,
+    pub gid: u32,
+    pub mode: u32,
+    pub expected: Option<DirectoryIdentity>,
+    pub anchor: PathBuf,
+    pub anchor_identity: DirectoryIdentity,
+}
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServiceState {
+    pub active: bool,
+    pub enabled: bool,
+}
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServiceSnapshot {
+    pub wolf: ServiceState,
+    pub catalog: ServiceState,
+    pub ssh_unit: String,
+    pub ssh: ServiceState,
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InstallPlan {
@@ -73,12 +117,20 @@ pub struct InstallPlan {
     pub policy: RootPolicy,
     pub storage_mapping: Vec<StorageMapping>,
     pub proposed_writes: Vec<PlannedWrite>,
+    #[serde(default)]
+    pub proposed_directories: Vec<PlannedDirectory>,
+    #[serde(default)]
+    pub initial_files: Vec<InitialFile>,
     pub source_binary: PathBuf,
     pub source_identity: FileIdentity,
     pub broker_config_source: Option<PathBuf>,
     pub broker_identity: Option<FileIdentity>,
     pub authorized_public_keys: Vec<String>,
     pub account_exists: bool,
+    #[serde(default)]
+    pub service_snapshot: ServiceSnapshot,
+    #[serde(default)]
+    pub receipt_identity: Option<FileIdentity>,
     pub rollback: String,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -90,6 +142,8 @@ pub struct InstallReport {
     pub installed_files: std::collections::BTreeMap<PathBuf, FileIdentity>,
     pub verified_backup_directory: PathBuf,
     pub activation_required: bool,
+    #[serde(default)]
+    pub retained_files: Vec<PathBuf>,
     pub recovery_instructions: String,
 }
 struct Recipe {
@@ -362,6 +416,64 @@ fn recipes(request: &InstallRequest) -> io::Result<Vec<Recipe>> {
             gid: request.policy.steam_gid,
         });
     }
+    let mut initial_paths = std::collections::BTreeSet::new();
+    for initial in &request.initial_files {
+        if request.mode != InstallMode::Install
+            || !initial_paths.insert(&initial.path)
+            || initial.uid != 0
+            || initial.gid != 0
+            || initial.mode != 0o644
+            || initial.bytes.len() > 2 * 1024 * 1024
+        {
+            return Err(fail("invalid bootstrap file authority"));
+        }
+        if expected(&initial.path)?.is_some() {
+            return Err(fail("bootstrap defaults cannot replace existing state"));
+        }
+        if initial.path
+            == request
+                .policy
+                .wolf_config
+                .root
+                .join(&request.policy.wolf_config.relative_path)
+        {
+            let text = std::str::from_utf8(&initial.bytes)
+                .map_err(|_| fail("bootstrap Wolf config must be UTF8"))?;
+            let _: toml::Table =
+                toml::from_str(text).map_err(|_| fail("invalid initial Wolf TOML"))?;
+        } else if initial.path == request.policy.compose_file {
+            validate_compose_initial(&initial.bytes, &request.policy)?;
+        } else {
+            return Err(fail("bootstrap input path is not granted"));
+        }
+        recipes.insert(
+            0,
+            Recipe {
+                path: initial.path.clone(),
+                bytes: initial.bytes.clone(),
+                uid: 0,
+                gid: 0,
+                mode: 0o644,
+            },
+        );
+    }
+    for required in [
+        request
+            .policy
+            .wolf_config
+            .root
+            .join(&request.policy.wolf_config.relative_path),
+        request.policy.compose_file.clone(),
+    ] {
+        if expected(&required)?.is_none() && !initial_paths.contains(&required) {
+            return Err(fail(
+                "missing Wolf source requires explicit default producer input",
+            ));
+        }
+        if expected(&required)?.is_some() {
+            trusted_path(&required, 0, false)?;
+        }
+    }
     Ok(recipes)
 }
 fn account_exists() -> io::Result<bool> {
@@ -436,7 +548,9 @@ fn pending(policy: &RootPolicy) -> io::Result<()> {
         Err(e) => return Err(e),
     }
 
-    if crate::transactions::TransactionStore::open(&policy.backup_root)?.recovery_pending()? {
+    if policy.backup_root.exists()
+        && crate::transactions::TransactionStore::open(&policy.backup_root)?.recovery_pending()?
+    {
         return Err(fail("unresolved native restore prevents installation"));
     }
     // Legacy state is never guessed away. Operator must finish its restore first.
@@ -493,13 +607,17 @@ fn inspect_adopt(policy: &RootPolicy) -> io::Result<()> {
     Ok(())
 }
 pub fn preflight(request: &InstallRequest) -> io::Result<InstallPlan> {
+    preflight_with(request, &Environment::default())
+}
+fn preflight_with(request: &InstallRequest, environment: &Environment) -> io::Result<InstallPlan> {
     if rustix::process::geteuid().as_raw() != 0 {
         return Err(fail(
             "installer preflight requires root authority inspection",
         ));
     }
-    request.policy.validate()?;
-    let existing_policy = Path::new("/etc/wolf-manager/host-policy.json");
+    request.policy.validate_install_prerequisites()?;
+    let existing_policy_path = environment.path(Path::new("/etc/wolf-manager/host-policy.json"));
+    let existing_policy = existing_policy_path.as_path();
     if existing_policy.exists() {
         trusted_path(existing_policy, 0, false)?;
         let previous: RootPolicy = serde_json::from_slice(&read(existing_policy)?.0)?;
@@ -545,7 +663,14 @@ pub fn preflight(request: &InstallRequest) -> io::Result<InstallPlan> {
         .map(read)
         .transpose()?
         .map(|(_, i)| i);
-    let recipes = recipes(request)?;
+    let mut recipes = recipes(request)?;
+    for recipe in &mut recipes {
+        if !request.initial_files.iter().any(|f| f.path == recipe.path)
+            && request.policy.broker_secret_file.as_ref() != Some(&recipe.path)
+        {
+            recipe.path = environment.path(&recipe.path);
+        }
+    }
     let receipt_path = request.policy.state_root.join("installation.json");
     let previous: Option<InstallReport> = if receipt_path.exists() {
         trusted_path(&receipt_path, 0, false)?;
@@ -606,7 +731,7 @@ pub fn preflight(request: &InstallRequest) -> io::Result<InstallPlan> {
             .join(&request.policy.wolf_config.relative_path),
         action: "preserve Wolf identity, custom apps and bind mounts".into(),
     });
-    Ok(InstallPlan{version:1,id:Uuid::new_v4(),mode:request.mode.clone(),policy:request.policy.clone(),storage_mapping:mappings,proposed_writes:writes,source_binary:request.source_binary.clone(),source_identity,broker_config_source:request.broker_config_source.clone(),broker_identity,authorized_public_keys:request.authorized_public_keys.clone(),account_exists:account_exists()?,rollback:"All changed existing files are verified in backup_root/installer/<plan UUID>; restore only if current postimage still matches. New files may be removed only if installer-owned postimages match. Never remove the account, backups, Steam data or Wolf state automatically.".into()})
+    Ok(InstallPlan{version:1,id:Uuid::new_v4(),mode:request.mode.clone(),policy:request.policy.clone(),storage_mapping:mappings,proposed_writes:writes.clone(),proposed_directories:planned_directories(&request.policy,&writes)?,initial_files:request.initial_files.clone(),source_binary:request.source_binary.clone(),source_identity,broker_config_source:request.broker_config_source.clone(),broker_identity,authorized_public_keys:request.authorized_public_keys.clone(),account_exists:environment.account_exists()?,service_snapshot:environment.services(&request.policy)?,receipt_identity:expected(&receipt_path)?,rollback:"All changed existing files are verified in backup_root/installer/<plan UUID>; restore only if current postimage still matches. New files may be removed only if installer-owned postimages match. Never remove the account, backups, Steam data or Wolf state automatically.".into()})
 }
 fn directory(path: &Path, mode: u32) -> io::Result<()> {
     if path.exists() {
@@ -682,10 +807,13 @@ fn validate_configs(folder: &Path, recipes: &[Recipe]) -> io::Result<()> {
     Ok(())
 }
 pub fn apply(plan: &InstallPlan) -> io::Result<InstallReport> {
+    apply_with(plan, &Environment::default())
+}
+fn apply_with(plan: &InstallPlan, environment: &Environment) -> io::Result<InstallReport> {
     if rustix::process::geteuid().as_raw() != 0 || plan.version != 1 {
         return Err(fail("root authority and plan version required"));
     }
-    plan.policy.validate()?;
+    plan.policy.validate_install_prerequisites()?;
     pending(&plan.policy)?;
     let request = InstallRequest {
         mode: plan.mode.clone(),
@@ -693,6 +821,34 @@ pub fn apply(plan: &InstallPlan) -> io::Result<InstallReport> {
         authorized_public_keys: plan.authorized_public_keys.clone(),
         source_binary: plan.source_binary.clone(),
         broker_config_source: plan.broker_config_source.clone(),
+        initial_files: plan.initial_files.clone(),
+    };
+    let admission = if plan.policy.backup_root.join("requests").exists() {
+        Some(environment.admission(&plan.policy)?)
+    } else {
+        None
+    };
+    let refreshed = preflight_with(&request, environment)?;
+    if refreshed.proposed_writes != plan.proposed_writes
+        || refreshed.proposed_directories != plan.proposed_directories
+        || refreshed.service_snapshot != plan.service_snapshot
+        || refreshed.source_identity != plan.source_identity
+        || refreshed.broker_identity != plan.broker_identity
+        || refreshed.storage_mapping != plan.storage_mapping
+        || refreshed.receipt_identity != plan.receipt_identity
+        || refreshed.account_exists != plan.account_exists
+    {
+        return Err(fail(
+            "installer inputs changed since preview; no writes permitted",
+        ));
+    }
+    for directory in &plan.proposed_directories {
+        create_planned_directory(directory)?;
+    }
+    let _late_admission = if admission.is_none() {
+        Some(environment.admission(&plan.policy)?)
+    } else {
+        None
     };
     let lock_path = plan.policy.state_root.join("installer.lock");
     let lock = OpenOptions::new()
@@ -708,24 +864,20 @@ pub fn apply(plan: &InstallPlan) -> io::Result<InstallReport> {
     if metadata.uid() != 0 || metadata.nlink() != 1 || metadata.mode() & 0o077 != 0 {
         return Err(fail("unsafe installer lock"));
     }
-    let refreshed = preflight(&request)?;
-    if refreshed.proposed_writes != plan.proposed_writes
-        || refreshed.source_identity != plan.source_identity
-        || refreshed.broker_identity != plan.broker_identity
-        || refreshed.storage_mapping != plan.storage_mapping
-        || refreshed.account_exists != plan.account_exists
-    {
-        return Err(fail(
-            "installer inputs changed since preview; no writes permitted",
-        ));
-    }
     let folder = plan
         .policy
         .backup_root
         .join("installer")
         .join(plan.id.to_string());
     directory(&folder, 0o700)?;
-    let recipes = recipes(&request)?;
+    let mut recipes = recipes(&request)?;
+    for recipe in &mut recipes {
+        if !request.initial_files.iter().any(|f| f.path == recipe.path)
+            && request.policy.broker_secret_file.as_ref() != Some(&recipe.path)
+        {
+            recipe.path = environment.path(&recipe.path);
+        }
+    }
     if recipes.len() != plan.proposed_writes.len()
         || recipes.iter().zip(&plan.proposed_writes).any(|(r, w)| {
             r.path != w.destination
@@ -737,7 +889,7 @@ pub fn apply(plan: &InstallPlan) -> io::Result<InstallReport> {
     {
         return Err(fail("recipe changed before effects"));
     }
-    validate_configs(&folder, &recipes)?;
+    environment.validate_configs(&folder, &recipes)?;
 
     for (index, write) in plan.proposed_writes.iter().enumerate() {
         if expected(&write.destination)? != write.expected {
@@ -763,7 +915,7 @@ pub fn apply(plan: &InstallPlan) -> io::Result<InstallReport> {
         0,
     )?;
     // Account creation is deliberately last among prerequisites, before policy installation.
-    if !plan.account_exists {
+    if !plan.account_exists && !environment.fixture() {
         let useradd = ["/usr/sbin/useradd", "/usr/bin/useradd"]
             .into_iter()
             .find(|p| Path::new(p).exists())
@@ -793,6 +945,7 @@ pub fn apply(plan: &InstallPlan) -> io::Result<InstallReport> {
     }
     let mut changed = Vec::new();
     for (r, write) in recipes.iter().zip(&plan.proposed_writes) {
+        environment.before_write(changed.len())?;
         if write
             .expected
             .as_ref()
@@ -867,6 +1020,7 @@ pub fn apply(plan: &InstallPlan) -> io::Result<InstallReport> {
             .collect::<io::Result<_>>()?,
         verified_backup_directory: folder.clone(),
         activation_required: true,
+        retained_files: Vec::new(),
         recovery_instructions: plan.rollback.clone(),
     };
     create_file(
@@ -916,4 +1070,964 @@ pub fn apply(plan: &InstallPlan) -> io::Result<InstallReport> {
     File::open(&plan.policy.state_root)?.sync_all()?;
     // No automatic service start/restart: operator reviews the verified plan before cutover.
     Ok(report)
+}
+
+// Root-only disposable filesystem fixtures are added with the guarded core below.
+
+#[derive(Default)]
+struct Environment {
+    #[cfg(test)]
+    prefix: Option<PathBuf>,
+    #[cfg(test)]
+    fail_after: Option<usize>,
+}
+impl Environment {
+    fn admission(&self, policy: &RootPolicy) -> io::Result<File> {
+        let directory_path = policy.backup_root.join("requests");
+        directory(&directory_path, 0o700)?;
+        let path = directory_path.join(".admission.lock");
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600)
+            .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+            .open(path)?;
+        let m = file.metadata()?;
+        if m.uid() != 0 || m.nlink() != 1 || m.mode() & 0o077 != 0 {
+            return Err(fail("unsafe RPC admission lock"));
+        }
+        file.lock_exclusive()?;
+        Ok(file)
+    }
+    fn fixture(&self) -> bool {
+        #[cfg(test)]
+        {
+            self.prefix.is_some()
+        }
+        #[cfg(not(test))]
+        {
+            false
+        }
+    }
+    fn path(&self, path: &Path) -> PathBuf {
+        #[cfg(test)]
+        if let Some(prefix) = &self.prefix {
+            return prefix.join(path.strip_prefix("/").unwrap());
+        }
+        path.to_owned()
+    }
+    fn account_exists(&self) -> io::Result<bool> {
+        if self.fixture() {
+            Ok(true)
+        } else {
+            account_exists()
+        }
+    }
+    fn validate_configs(&self, folder: &Path, recipes: &[Recipe]) -> io::Result<()> {
+        if self.fixture() {
+            return Ok(());
+        }
+        validate_configs(folder, recipes)
+    }
+    fn before_write(&self, _completed: usize) -> io::Result<()> {
+        #[cfg(test)]
+        if self.fail_after.is_some_and(|limit| _completed >= limit) {
+            return Err(fail("injected failure before next write"));
+        }
+        Ok(())
+    }
+    fn prepare_rollback(&self, _plan: &InstallPlan, _folder: &Path) -> io::Result<()> {
+        if _folder.join("activation.json").exists() && !self.fixture() {
+            if self.services(&_plan.policy)?.catalog.active {
+                checked_systemctl(&["stop", "wolf-manager-catalog.service"])?;
+            }
+            if self.services(&_plan.policy)?.wolf.active {
+                checked_systemctl(&["stop", &_plan.policy.service_unit])?;
+            }
+        }
+        Ok(())
+    }
+    fn finish_rollback(&self, _plan: &InstallPlan, _folder: &Path) -> io::Result<()> {
+        if !_folder.join("activation.json").exists() {
+            return Ok(());
+        }
+        if self.fixture() {
+            return self.store_services(&_plan.service_snapshot);
+        }
+        checked_systemctl(&["daemon-reload"])?;
+        restore_state(&_plan.policy.service_unit, &_plan.service_snapshot.wolf)?;
+        restore_state(
+            "wolf-manager-catalog.service",
+            &_plan.service_snapshot.catalog,
+        )?;
+        if _plan.service_snapshot.ssh.active {
+            checked_systemctl(&["try-reload-or-restart", &_plan.service_snapshot.ssh_unit])?;
+        }
+        Ok(())
+    }
+    fn services(&self, policy: &RootPolicy) -> io::Result<ServiceSnapshot> {
+        #[cfg(test)]
+        if let Some(prefix) = &self.prefix {
+            let path = prefix.join(".service-state.json");
+            if path.exists() {
+                return Ok(serde_json::from_slice(&read(&path)?.0)?);
+            }
+            return Ok(ServiceSnapshot {
+                ssh_unit: "sshd.service".into(),
+                ..ServiceSnapshot::default()
+            });
+        }
+        capture_services(policy)
+    }
+    fn store_services(&self, _snapshot: &ServiceSnapshot) -> io::Result<()> {
+        #[cfg(test)]
+        if let Some(prefix) = &self.prefix {
+            let path = prefix.join(".service-state.json");
+            let bytes = serde_json::to_vec(_snapshot)?;
+            fs::write(&path, bytes)?;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+            File::open(&path)?.sync_all()?;
+            File::open(prefix)?.sync_all()?;
+        }
+        Ok(())
+    }
+    fn activate_services(&self, plan: &InstallPlan, options: &ActivationOptions) -> io::Result<()> {
+        if self.fixture() {
+            let mut state = self.services(&plan.policy)?;
+            if options.start_wolf {
+                state.wolf.active = true;
+            }
+            if options.start_catalog {
+                state.catalog.active = true;
+            }
+            if options.enable_on_boot {
+                state.wolf.enabled = true;
+                if plan.policy.broker_secret_file.is_some() {
+                    state.catalog.enabled = true;
+                }
+            }
+            return self.store_services(&state);
+        }
+        checked_systemctl(&["daemon-reload"])?;
+        if plan.service_snapshot.ssh.active {
+            checked_systemctl(&["try-reload-or-restart", &plan.service_snapshot.ssh_unit])?;
+        }
+        if options.enable_on_boot {
+            checked_systemctl(&["enable", &plan.policy.service_unit])?;
+            if plan.policy.broker_secret_file.is_some() {
+                checked_systemctl(&["enable", "wolf-manager-catalog.service"])?;
+            }
+        }
+        if options.start_catalog {
+            checked_systemctl(&["start", "wolf-manager-catalog.service"])?;
+        }
+        if options.start_wolf {
+            checked_systemctl(&["start", &plan.policy.service_unit])?;
+        }
+        Ok(())
+    }
+}
+fn directory_identity(path: &Path) -> io::Result<DirectoryIdentity> {
+    let m = fs::symlink_metadata(path)?;
+    if !m.is_dir() || m.file_type().is_symlink() || m.mode() & 0o022 != 0 {
+        return Err(fail("unsafe directory identity"));
+    }
+    Ok(DirectoryIdentity {
+        device: m.dev(),
+        inode: m.ino(),
+        uid: m.uid(),
+        gid: m.gid(),
+        mode: m.mode() & 0o777,
+    })
+}
+fn planned_directories(
+    policy: &RootPolicy,
+    writes: &[PlannedWrite],
+) -> io::Result<Vec<PlannedDirectory>> {
+    let mut desired = std::collections::BTreeMap::new();
+    for write in writes {
+        let mut path = write.destination.parent().unwrap().to_owned();
+        while !path.exists() {
+            desired.entry(path.clone()).or_insert((0, 0, 0o755));
+            path = path
+                .parent()
+                .ok_or_else(|| fail("missing directory root"))?
+                .to_owned();
+        }
+    }
+    let requests = policy.backup_root.join("requests");
+    for (path, uid, gid, mode) in [
+        (&requests, 0, 0, 0o700),
+        (&policy.backup_root, 0, 0, 0o700),
+        (&policy.state_root, 0, 0, 0o700),
+        (
+            &policy.catalog_state_directory,
+            policy.steam_uid,
+            policy.steam_gid,
+            0o700,
+        ),
+    ] {
+        desired.insert(path.clone(), (uid, gid, mode));
+        let mut parent = path.parent().unwrap();
+        while !parent.exists() {
+            desired
+                .entry(parent.to_owned())
+                .or_insert((uid, gid, 0o755));
+            parent = parent
+                .parent()
+                .ok_or_else(|| fail("missing grant ancestor"))?;
+        }
+    }
+    let mut dirs = Vec::new();
+    for (path, (uid, gid, mode)) in desired {
+        let expected = if path.exists() {
+            Some(directory_identity(&path)?)
+        } else {
+            None
+        };
+        if expected
+            .as_ref()
+            .is_some_and(|i| i.uid != uid || i.gid != gid || (mode == 0o700 && i.mode & 0o077 != 0))
+        {
+            return Err(fail("existing store ownership or privacy mismatch"));
+        }
+        let mut anchor = path.parent().unwrap();
+        while !anchor.exists() {
+            anchor = anchor.parent().ok_or_else(|| fail("missing anchor"))?;
+        }
+        trusted_path(anchor, uid, true)?;
+        let anchor_identity = directory_identity(anchor)?;
+        let anchor = anchor.to_owned();
+        dirs.push(PlannedDirectory {
+            path,
+            uid,
+            gid,
+            mode,
+            expected,
+            anchor,
+            anchor_identity,
+        });
+    }
+    dirs.sort_by_key(|d| d.path.components().count());
+    Ok(dirs)
+}
+fn create_planned_directory(directory: &PlannedDirectory) -> io::Result<()> {
+    if directory_identity(&directory.anchor)? != directory.anchor_identity {
+        return Err(fail("directory anchor changed"));
+    }
+    if let Some(identity) = &directory.expected {
+        if directory_identity(&directory.path)? != *identity {
+            return Err(fail("existing directory drift"));
+        }
+        return Ok(());
+    }
+    let parent = directory
+        .path
+        .parent()
+        .ok_or_else(|| fail("missing directory parent"))?;
+    let fd = File::from(rustix::fs::openat2(
+        rustix::fs::CWD,
+        parent,
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+        rustix::fs::ResolveFlags::NO_SYMLINKS | rustix::fs::ResolveFlags::NO_MAGICLINKS,
+    )?);
+    let name = directory
+        .path
+        .file_name()
+        .ok_or_else(|| fail("missing directory name"))?;
+    rustix::fs::mkdirat(&fd, name, rustix::fs::Mode::from_raw_mode(0o700))?;
+    let created = File::from(rustix::fs::openat2(
+        &fd,
+        name,
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+        rustix::fs::ResolveFlags::BENEATH
+            | rustix::fs::ResolveFlags::NO_SYMLINKS
+            | rustix::fs::ResolveFlags::NO_MAGICLINKS,
+    )?);
+    rustix::fs::fchown(
+        &created,
+        Some(rustix::fs::Uid::from_raw(directory.uid)),
+        Some(rustix::fs::Gid::from_raw(directory.gid)),
+    )?;
+    created.set_permissions(fs::Permissions::from_mode(directory.mode))?;
+    created.sync_all()?;
+    fd.sync_all()
+}
+fn validate_compose_initial(bytes: &[u8], policy: &RootPolicy) -> io::Result<()> {
+    let value: serde_json::Value = serde_json::from_slice(bytes)
+        .map_err(|_| fail("bootstrap Compose must be closed JSON YAML subset"))?;
+    let root = value
+        .as_object()
+        .ok_or_else(|| fail("invalid Compose object"))?;
+    if root.len() != 1 || !root.contains_key("services") {
+        return Err(fail("unknown Compose top-level field"));
+    }
+    let services = value["services"]
+        .as_object()
+        .ok_or_else(|| fail("invalid Compose services"))?;
+    if services.len() != 1 || !services.contains_key("wolf") {
+        return Err(fail("only configured Wolf service is allowed"));
+    }
+    let wolf = services["wolf"]
+        .as_object()
+        .ok_or_else(|| fail("invalid Wolf Compose service"))?;
+    for field in wolf.keys() {
+        if ![
+            "image",
+            "container_name",
+            "pull_policy",
+            "restart",
+            "network_mode",
+            "privileged",
+            "volumes",
+            "devices",
+            "device_cgroup_rules",
+            "environment",
+            "group_add",
+            "security_opt",
+            "user",
+            "working_dir",
+        ]
+        .contains(&field.as_str())
+        {
+            return Err(fail("unknown bootstrap Compose service field"));
+        }
+    }
+    if wolf.get("image").and_then(|v| v.as_str()) != Some(&policy.image_ref)
+        || wolf.get("container_name").and_then(|v| v.as_str()) != Some(&policy.container_name)
+        || wolf.get("pull_policy").and_then(|v| v.as_str()) != Some("never")
+    {
+        return Err(fail("Compose policy identity mismatch"));
+    }
+    Ok(())
+}
+fn systemctl(args: &[&str]) -> io::Result<std::process::Output> {
+    trusted_path(Path::new("/usr/bin/systemctl"), 0, false)?;
+    Command::new("/usr/bin/systemctl")
+        .args(args)
+        .env_clear()
+        .output()
+}
+fn checked_systemctl(args: &[&str]) -> io::Result<()> {
+    let output = systemctl(args)?;
+    if !output.status.success() {
+        return Err(fail(
+            "fixed service action failed; installer recovery remains pending",
+        ));
+    }
+    Ok(())
+}
+fn restore_state(unit: &str, state: &ServiceState) -> io::Result<()> {
+    checked_systemctl(&[if state.enabled { "enable" } else { "disable" }, unit])?;
+    checked_systemctl(&[if state.active { "start" } else { "stop" }, unit])
+}
+fn capture_state(unit: &str) -> io::Result<ServiceState> {
+    let active = systemctl(&["is-active", "--quiet", unit])?.status.success();
+    let enabled = systemctl(&["is-enabled", unit])?;
+    let text = String::from_utf8_lossy(&enabled.stdout);
+    if text.trim() == "masked" {
+        return Err(fail("masked units require explicit operator recovery"));
+    }
+    Ok(ServiceState {
+        active,
+        enabled: enabled.status.success() && text.trim().starts_with("enabled"),
+    })
+}
+fn capture_services(policy: &RootPolicy) -> io::Result<ServiceSnapshot> {
+    let mut ssh_unit = None;
+    for candidate in ["sshd.service", "ssh.service"] {
+        let state = systemctl(&["show", "--property=LoadState", "--value", candidate])?;
+        if state.status.success() && String::from_utf8_lossy(&state.stdout).trim() == "loaded" {
+            ssh_unit = Some(candidate);
+            break;
+        }
+    }
+    let ssh_unit = ssh_unit.ok_or_else(|| fail("no supported SSH service found"))?;
+    Ok(ServiceSnapshot {
+        wolf: capture_state(&policy.service_unit)?,
+        catalog: capture_state("wolf-manager-catalog.service")?,
+        ssh_unit: ssh_unit.into(),
+        ssh: capture_state(ssh_unit)?,
+    })
+}
+
+fn saved_plan(plan: &InstallPlan) -> io::Result<PathBuf> {
+    if rustix::process::geteuid().as_raw() != 0 || plan.version != 1 {
+        return Err(fail("root and supported plan version required"));
+    }
+    plan.policy.validate_structure()?;
+    trusted_path(&plan.policy.backup_root, 0, true)?;
+    let folder = plan
+        .policy
+        .backup_root
+        .join("installer")
+        .join(plan.id.to_string());
+    trusted_path(&folder, 0, true)?;
+    let (bytes, identity) = read(&folder.join("plan.json"))?;
+    if identity.uid != 0 || identity.mode != 0o600 {
+        return Err(fail("unsafe saved installation plan"));
+    }
+    let original: InstallPlan = serde_json::from_slice(&bytes)?;
+    if sha(&serde_json::to_vec(&original)?) != sha(&serde_json::to_vec(plan)?) {
+        return Err(fail("supplied plan differs from protected saved plan"));
+    }
+    Ok(folder)
+}
+fn matches_identity(current: &FileIdentity, expected: &FileIdentity) -> bool {
+    current.sha256 == expected.sha256
+        && current.uid == expected.uid
+        && current.gid == expected.gid
+        && current.mode == expected.mode
+}
+fn installer_lock(policy: &RootPolicy) -> io::Result<File> {
+    trusted_path(&policy.state_root, 0, true)?;
+    let lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+        .open(policy.state_root.join("installer.lock"))?;
+    let metadata = lock.metadata()?;
+    if metadata.uid() != 0 || metadata.nlink() != 1 || metadata.mode() & 0o077 != 0 {
+        return Err(fail("unsafe installer lock"));
+    }
+    lock.lock_exclusive()?;
+    Ok(lock)
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivationOptions {
+    pub start_wolf: bool,
+    pub start_catalog: bool,
+    pub enable_on_boot: bool,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivationReport {
+    pub version: u8,
+    pub id: Uuid,
+    pub requested: ActivationOptions,
+    pub phase: String,
+    pub before: ServiceSnapshot,
+    pub after: Option<ServiceSnapshot>,
+}
+pub fn activate(plan: &InstallPlan, options: ActivationOptions) -> io::Result<ActivationReport> {
+    activate_with(plan, options, &Environment::default())
+}
+fn activate_with(
+    plan: &InstallPlan,
+    options: ActivationOptions,
+    environment: &Environment,
+) -> io::Result<ActivationReport> {
+    let folder = saved_plan(plan)?;
+    let _admission = environment.admission(&plan.policy)?;
+    let _lock = installer_lock(&plan.policy)?;
+    plan.policy.validate()?;
+    pending(&plan.policy)?;
+    if !["sshd.service", "ssh.service"].contains(&plan.service_snapshot.ssh_unit.as_str()) {
+        return Err(fail("invalid captured SSH unit"));
+    }
+    if options.start_catalog && plan.policy.broker_secret_file.is_none() {
+        return Err(fail(
+            "catalog activation requires configured private broker credentials",
+        ));
+    }
+    let report: InstallReport =
+        serde_json::from_slice(&read(&plan.policy.state_root.join("installation.json"))?.0)?;
+    if report.id != plan.id || report.version != 1 {
+        return Err(fail("activation requires this completed installation"));
+    }
+    let config = plan
+        .policy
+        .wolf_config
+        .root
+        .join(&plan.policy.wolf_config.relative_path);
+    for (path, identity) in &report.installed_files {
+        if path != &config {
+            identity.verify(path)?;
+        }
+    }
+    let before = environment.services(&plan.policy)?;
+    if before != plan.service_snapshot {
+        return Err(fail(
+            "service state changed since preview; activation refused",
+        ));
+    }
+    let mut templates = render_privilege_templates(&plan.authorized_public_keys)?
+        .into_iter()
+        .map(|(p, bytes, mode)| Recipe {
+            path: environment.path(Path::new(&p)),
+            bytes,
+            mode,
+            uid: 0,
+            gid: 0,
+        })
+        .collect::<Vec<_>>();
+    for recipe in &mut templates {
+        recipe.bytes = read(&recipe.path)?.0;
+    }
+    let checks = folder.join(format!("activation-check-{}", Uuid::new_v4()));
+    directory(&checks, 0o700)?;
+    environment.validate_configs(&checks, &templates)?;
+    let mut record = ActivationReport {
+        version: 1,
+        id: plan.id,
+        requested: options.clone(),
+        phase: "started".into(),
+        before,
+        after: None,
+    };
+    create_file(
+        &folder.join("activation.json"),
+        &serde_json::to_vec_pretty(&record)?,
+        0o600,
+        0,
+        0,
+    )?;
+    environment.activate_services(plan, &options)?;
+    record.phase = "completed".into();
+    record.after = Some(environment.services(&plan.policy)?);
+    create_file(
+        &folder.join("activation-completed.json"),
+        &serde_json::to_vec_pretty(&record)?,
+        0o600,
+        0,
+        0,
+    )?;
+    Ok(record)
+}
+pub fn rollback(plan: &InstallPlan) -> io::Result<InstallReport> {
+    rollback_with(plan, &Environment::default())
+}
+fn rollback_with(plan: &InstallPlan, environment: &Environment) -> io::Result<InstallReport> {
+    let folder = saved_plan(plan)?;
+    let _admission = environment.admission(&plan.policy)?;
+    let _lock = installer_lock(&plan.policy)?;
+    let receipt = plan.policy.state_root.join("installation.json");
+    let receipt_current = expected(&receipt)?;
+    let receipt_is_new = if receipt_current.is_some() {
+        let report: InstallReport = serde_json::from_slice(&read(&receipt)?.0)?;
+        report.id == plan.id
+    } else {
+        false
+    };
+    if !receipt_is_new && receipt_current != plan.receipt_identity {
+        return Err(fail("another install or receipt drift blocks rollback"));
+    }
+    let mut work = Vec::new();
+    let mut retained = Vec::new();
+    for (index, write) in plan.proposed_writes.iter().enumerate() {
+        if plan
+            .initial_files
+            .iter()
+            .any(|f| f.path == write.destination)
+            || plan.policy.broker_secret_file.as_ref() == Some(&write.destination)
+        {
+            if write.destination.exists() {
+                retained.push(write.destination.clone());
+            }
+            continue;
+        }
+        let current = expected(&write.destination)?;
+        if let Some(identity) = &write.expected {
+            let (_, backup) = read(&folder.join(format!("preimage-{index}")))?;
+            if backup.sha256 != identity.sha256 || backup.uid != 0 || backup.mode != 0o600 {
+                return Err(fail("rollback backup is corrupt or untrusted"));
+            }
+            if current
+                .as_ref()
+                .is_some_and(|now| matches_identity(now, identity))
+            {
+                continue;
+            }
+        } else if current.is_none() {
+            continue;
+        }
+        if current.as_ref().is_some_and(|now| {
+            now.sha256 != write.sha256
+                || now.uid != write.uid
+                || now.gid != write.gid
+                || now.mode != write.mode
+        }) {
+            return Err(fail("postimage drift blocks all rollback effects"));
+        }
+        if current.is_none() && write.expected.is_some() {
+            let displaced = write
+                .destination
+                .parent()
+                .unwrap()
+                .join(format!(".wolf-manager-{}.previous", plan.id));
+            if expected(&displaced)?.as_ref() != write.expected.as_ref() {
+                return Err(fail(
+                    "missing destination is not a verified interrupted replacement",
+                ));
+            }
+        }
+        work.push((index, write, current));
+    }
+    if receipt_is_new && let Some(identity) = &plan.receipt_identity {
+        let backup = read(&folder.join("receipt-preimage"))?.1;
+        if backup.sha256 != identity.sha256 {
+            return Err(fail("previous installation receipt backup is corrupt"));
+        }
+    }
+    environment.prepare_rollback(plan, &folder)?;
+    let mut changed = Vec::new();
+    for (index, write, current) in work {
+        if expected(&write.destination)? != current {
+            return Err(fail("rollback destination changed after preview"));
+        }
+        let parent = write.destination.parent().unwrap();
+        trusted_path(parent, 0, true)?;
+        if current.is_some() {
+            let preserved = parent.join(format!(
+                ".wolf-manager-rollback-{}-{index}.postimage",
+                Uuid::new_v4()
+            ));
+            rustix::fs::renameat_with(
+                rustix::fs::CWD,
+                &write.destination,
+                rustix::fs::CWD,
+                &preserved,
+                rustix::fs::RenameFlags::NOREPLACE,
+            )?;
+            if expected(&preserved)? != current {
+                let _ = rustix::fs::renameat_with(
+                    rustix::fs::CWD,
+                    &preserved,
+                    rustix::fs::CWD,
+                    &write.destination,
+                    rustix::fs::RenameFlags::NOREPLACE,
+                );
+                return Err(fail("rollback raced with another writer; bytes retained"));
+            }
+            File::open(parent)?.sync_all()?;
+        }
+        if let Some(original) = &write.expected {
+            let displaced = parent.join(format!(".wolf-manager-{}.previous", plan.id));
+            if expected(&displaced)?.as_ref() == Some(original) {
+                rustix::fs::renameat_with(
+                    rustix::fs::CWD,
+                    &displaced,
+                    rustix::fs::CWD,
+                    &write.destination,
+                    rustix::fs::RenameFlags::NOREPLACE,
+                )?;
+            } else {
+                let bytes = read(&folder.join(format!("preimage-{index}")))?.0;
+                create_file(
+                    &write.destination,
+                    &bytes,
+                    original.mode,
+                    original.uid,
+                    original.gid,
+                )?;
+            }
+            if !matches_identity(&read(&write.destination)?.1, original) {
+                return Err(fail("restored preimage verification failed"));
+            }
+        }
+        changed.push(write.destination.clone());
+        File::open(parent)?.sync_all()?;
+    }
+    if receipt_is_new {
+        let preserved = plan.policy.state_root.join(format!(
+            ".installation-rollback-{}.postimage",
+            Uuid::new_v4()
+        ));
+        if expected(&receipt)? != receipt_current {
+            return Err(fail("receipt changed during rollback"));
+        }
+        rustix::fs::renameat_with(
+            rustix::fs::CWD,
+            &receipt,
+            rustix::fs::CWD,
+            &preserved,
+            rustix::fs::RenameFlags::NOREPLACE,
+        )?;
+        if let Some(identity) = &plan.receipt_identity {
+            let displaced = plan
+                .policy
+                .state_root
+                .join(format!(".installation-{}.previous", plan.id));
+            if expected(&displaced)?.as_ref() == Some(identity) {
+                rustix::fs::renameat_with(
+                    rustix::fs::CWD,
+                    &displaced,
+                    rustix::fs::CWD,
+                    &receipt,
+                    rustix::fs::RenameFlags::NOREPLACE,
+                )?;
+            } else {
+                create_file(
+                    &receipt,
+                    &read(&folder.join("receipt-preimage"))?.0,
+                    identity.mode,
+                    identity.uid,
+                    identity.gid,
+                )?;
+            }
+        }
+        File::open(&plan.policy.state_root)?.sync_all()?;
+    }
+    environment.finish_rollback(plan, &folder)?;
+    let report=InstallReport{version:1,id:plan.id,changed_files:changed,installed_files:plan.proposed_writes.iter().filter_map(|w|expected(&w.destination).transpose().map(|result|result.map(|i|(w.destination.clone(),i)))).collect::<io::Result<_>>()?,verified_backup_directory:folder.clone(),activation_required:false,retained_files:retained,recovery_instructions:"Original verified metadata restored. Created Wolf configuration/Compose, broker secrets, directories, account and every backup remain preserved; review retained_files before another install. No Steam data removed.".into()};
+    create_file(
+        &folder.join(format!("rollback-report-{}.json", Uuid::new_v4())),
+        &serde_json::to_vec_pretty(&report)?,
+        0o600,
+        0,
+        0,
+    )?;
+    Ok(report)
+}
+
+#[cfg(test)]
+mod root_fixture_tests {
+    use super::*;
+    struct RootFixture {
+        directory: tempfile::TempDir,
+        request: InstallRequest,
+        environment: Environment,
+    }
+    impl RootFixture {
+        fn new() -> Self {
+            let directory = tempfile::Builder::new()
+                .prefix("wolf-installer-")
+                .tempdir_in("/root")
+                .unwrap();
+            let base = directory.path();
+            for path in [
+                "profile/config",
+                "profile/steamapps/common",
+                "profile/userdata",
+                "wolf",
+                "bin",
+            ] {
+                fs::create_dir_all(base.join(path)).unwrap();
+            }
+            for path in [
+                "profile/config/config.vdf",
+                "profile/steamapps/libraryfolders.vdf",
+            ] {
+                let path = base.join(path);
+                fs::write(&path, b"\"Steam\" {}\n").unwrap();
+                let f = File::open(&path).unwrap();
+                rustix::fs::fchown(
+                    &f,
+                    Some(rustix::fs::Uid::from_raw(1000)),
+                    Some(rustix::fs::Gid::from_raw(1000)),
+                )
+                .unwrap();
+            }
+            fs::write(
+                base.join("wolf/config.toml"),
+                b"config_version=7\nuuid=\"preserve\"\n",
+            )
+            .unwrap();
+            fs::write(base.join("wolf/compose.json"), b"{}\n").unwrap();
+            fs::write(base.join("bin/steam"), b"placeholder process identity").unwrap();
+            let mut binary = vec![0u8; 128];
+            binary[..4].copy_from_slice(b"\x7fELF");
+            binary[4] = 2;
+            binary[5] = 1;
+            binary[6] = 1;
+            binary[16..18].copy_from_slice(&2u16.to_le_bytes());
+            binary[18..20].copy_from_slice(&62u16.to_le_bytes());
+            binary[32..40].copy_from_slice(&64u64.to_le_bytes());
+            binary[54..56].copy_from_slice(&56u16.to_le_bytes());
+            binary[56..58].copy_from_slice(&1u16.to_le_bytes());
+            binary[64..68].copy_from_slice(&1u32.to_le_bytes());
+            fs::write(base.join("source-binary"), binary).unwrap();
+            let policy:RootPolicy=serde_json::from_value(serde_json::json!({"version":1,"pc_id":"fixture","steam_uid":1000,"steam_gid":1000,"libraries":[{"library_id":"primary","steamapps_path":base.join("profile/steamapps"),"container_paths":["/home/steam/Steam/steamapps"]}],"steam_profiles":[{"root":base.join("profile"),"config_vdf":"config/config.vdf","libraryfolders_vdf":["steamapps/libraryfolders.vdf"],"userdata_directory":"userdata","container_userdata_paths":["/home/steam/Steam/userdata"]}],"wolf_config":{"root":base.join("wolf"),"relative_path":"config.toml","uid":0,"gid":0},"compose_file":base.join("wolf/compose.json"),"service_unit":"wolf.service","container_name":"wolf","image_ref":"ghcr.io/games-on-whales/wolf:stable","backup_root":base.join("backups"),"state_root":base.join("state"),"catalog_state_directory":base.join("catalog"),"broker_secret_file":null,"pull_on_start":true,"pull_timeout_seconds":60,"proton":null,"steam_executables":[base.join("bin/steam")],"steam_runner":{"type":"docker","image":"example.invalid/steam:stable"}})).unwrap();
+            let request=InstallRequest{mode:InstallMode::Install,policy,authorized_public_keys:vec!["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA fixture".into()],source_binary:base.join("source-binary"),broker_config_source:None,initial_files:Vec::new()};
+            let environment = Environment {
+                prefix: Some(base.join("system")),
+                fail_after: None,
+            };
+            Self {
+                directory,
+                request,
+                environment,
+            }
+        }
+    }
+    #[test]
+    #[ignore = "requires disposable root container; never execute on household host"]
+    fn prepared_sources_allow_missing_private_stores_without_writes() {
+        assert_eq!(
+            rustix::process::geteuid().as_raw(),
+            0,
+            "disposable root container required"
+        );
+        let fixture = RootFixture::new();
+        fixture
+            .request
+            .policy
+            .validate_install_prerequisites()
+            .unwrap();
+        assert!(!fixture.request.policy.backup_root.exists());
+        assert!(!fixture.request.policy.state_root.exists());
+        assert!(fixture.directory.path().exists());
+    }
+    #[test]
+    #[ignore = "requires disposable root container; never execute on household host"]
+    fn root_apply_is_idempotent_and_preserves_original_wolf_bytes() {
+        assert_eq!(
+            rustix::process::geteuid().as_raw(),
+            0,
+            "disposable root container required"
+        );
+        let fixture = RootFixture::new();
+        let config = fixture
+            .request
+            .policy
+            .wolf_config
+            .root
+            .join(&fixture.request.policy.wolf_config.relative_path);
+        let before = fs::read(&config).unwrap();
+        let plan = preflight_with(&fixture.request, &fixture.environment).unwrap();
+        let first = apply_with(&plan, &fixture.environment).unwrap();
+        assert!(!first.changed_files.is_empty());
+        assert_eq!(fs::read(&config).unwrap(), before);
+        fixture.request.policy.validate().unwrap();
+        let next = preflight_with(&fixture.request, &fixture.environment).unwrap();
+        let second = apply_with(&next, &fixture.environment).unwrap();
+        assert!(second.changed_files.is_empty());
+        assert_eq!(fs::read(&config).unwrap(), before);
+        assert_eq!(
+            fs::metadata(&fixture.request.policy.backup_root)
+                .unwrap()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert_eq!(
+            fs::metadata(&fixture.request.policy.catalog_state_directory)
+                .unwrap()
+                .uid(),
+            1000
+        );
+    }
+
+    #[test]
+    #[ignore = "requires disposable root container; never execute on household host"]
+    fn faulted_apply_has_verified_recovery_plan_and_guarded_rollback() {
+        assert_eq!(
+            rustix::process::geteuid().as_raw(),
+            0,
+            "disposable root container required"
+        );
+        let mut fixture = RootFixture::new();
+        let plan = preflight_with(&fixture.request, &fixture.environment).unwrap();
+        fixture.environment.fail_after = Some(2);
+        assert!(apply_with(&plan, &fixture.environment).is_err());
+        let folder = plan
+            .policy
+            .backup_root
+            .join("installer")
+            .join(plan.id.to_string());
+        assert!(folder.join("plan.json").is_file());
+        fixture.environment.fail_after = None;
+        let report = rollback_with(&plan, &fixture.environment).unwrap();
+        assert!(!report.changed_files.is_empty());
+        assert!(
+            plan.policy
+                .wolf_config
+                .root
+                .join(&plan.policy.wolf_config.relative_path)
+                .exists()
+        );
+        assert!(folder.join("plan.json").exists());
+    }
+    #[test]
+    #[ignore = "requires disposable root container; never execute on household host"]
+    fn rollback_refuses_changed_installed_file_and_retains_original_data() {
+        assert_eq!(
+            rustix::process::geteuid().as_raw(),
+            0,
+            "disposable root container required"
+        );
+        let fixture = RootFixture::new();
+        let plan = preflight_with(&fixture.request, &fixture.environment).unwrap();
+        apply_with(&plan, &fixture.environment).unwrap();
+        let target = fixture
+            .environment
+            .path(Path::new("/etc/ssh/authorized_keys.d/wolf-manager"));
+        fs::write(&target, b"legitimate operator edits").unwrap();
+        assert!(rollback_with(&plan, &fixture.environment).is_err());
+        assert_eq!(fs::read(target).unwrap(), b"legitimate operator edits");
+    }
+
+    #[test]
+    #[ignore = "requires disposable root container; never execute on household host"]
+    fn activation_is_explicit_and_rollback_restores_service_snapshot() {
+        assert_eq!(
+            rustix::process::geteuid().as_raw(),
+            0,
+            "disposable root container required"
+        );
+        let fixture = RootFixture::new();
+        let plan = preflight_with(&fixture.request, &fixture.environment).unwrap();
+        apply_with(&plan, &fixture.environment).unwrap();
+        let record = plan
+            .policy
+            .backup_root
+            .join("installer")
+            .join(plan.id.to_string())
+            .join("activation.json");
+        assert!(!record.exists());
+        let result = activate_with(
+            &plan,
+            ActivationOptions {
+                start_wolf: true,
+                start_catalog: false,
+                enable_on_boot: true,
+            },
+            &fixture.environment,
+        )
+        .unwrap();
+        assert!(result.after.unwrap().wolf.active);
+        rollback_with(&plan, &fixture.environment).unwrap();
+        assert_eq!(
+            fixture.environment.services(&plan.policy).unwrap(),
+            plan.service_snapshot
+        );
+        assert!(record.exists());
+    }
+    #[test]
+    #[ignore = "requires disposable root container; never execute on household host"]
+    fn bootstrap_default_state_survives_rollback_with_new_pairings() {
+        assert_eq!(
+            rustix::process::geteuid().as_raw(),
+            0,
+            "disposable root container required"
+        );
+        let mut fixture = RootFixture::new();
+        let config = fixture
+            .request
+            .policy
+            .wolf_config
+            .root
+            .join(&fixture.request.policy.wolf_config.relative_path);
+        fs::remove_file(&config).unwrap();
+        fs::remove_file(&fixture.request.policy.compose_file).unwrap();
+        fixture.request.initial_files=vec![InitialFile{path:config.clone(),bytes:b"config_version=7\nuuid=\"new-server\"\n".to_vec(),uid:0,gid:0,mode:0o644},InitialFile{path:fixture.request.policy.compose_file.clone(),bytes:serde_json::to_vec(&serde_json::json!({"services":{"wolf":{"image":fixture.request.policy.image_ref,"container_name":"wolf","pull_policy":"never"}}})).unwrap(),uid:0,gid:0,mode:0o644}];
+        let plan = preflight_with(&fixture.request, &fixture.environment).unwrap();
+        apply_with(&plan, &fixture.environment).unwrap();
+        let paired =
+            b"config_version=7\nuuid=\"new-server\"\npaired_clients=[\"valuable-pairing\"]\n";
+        fs::write(&config, paired).unwrap();
+        let report = rollback_with(&plan, &fixture.environment).unwrap();
+        assert_eq!(fs::read(&config).unwrap(), paired);
+        assert!(report.retained_files.contains(&config));
+        assert!(fixture.request.policy.compose_file.exists());
+    }
 }
