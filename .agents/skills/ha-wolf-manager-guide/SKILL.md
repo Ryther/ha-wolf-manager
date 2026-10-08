@@ -36,7 +36,7 @@ follow the guide's Ed25519 and restricted authorized-key instructions.
 
 ## Operate and diagnose
 
-Work on the explicitly selected PC. Saving desired settings stages a revision;
+Work on the explicitly selected PC. Saving desired settings creates a desired revision;
 it does not change a running game session. Start or dashboard Restart applies the
 requested staged revision through the fixed service. MQTT exposes exact ON/OFF
 controls for Home Assistant and voice automations; it does not expose Restart.

@@ -45,47 +45,62 @@ Crash tests for a stage-then-restart parent: before stage send, after stage send
 
 If staging is independently verified succeeded and the planned primary child remains durably not_dispatched, reconciliation terminates the parent as failed with code primary_not_dispatched and explicit stage_succeeded evidence. Desired/staged revision is visible, running revision remains the observed prior value. This is verified partial execution, never parent success or non-execution. No replay occurs; a subsequent explicit user action is a new operation after reconciliation. Any other possibly dispatched child must be terminally evidenced first; otherwise the parent remains unknown_interrupted. Test the crash after stage acknowledgment but before primary sending is committed.
 
-## Local acceptance snapshot — 2026-10-08
+## Verified isolated runtime
 
-An isolated native KVM Home Assistant OS 18.3 VM with Supervisor 2026.09.2,
-Core 2026.10.0 and Mosquitto app 7.1.1 installed and started the local manager
-app using its scratch Dockerfile. Real authenticated Supervisor Ingress, the
-sidebar shortcut, PC creation and host-key enrollment were exercised through
-the browser. These checks do not yet establish complete lifecycle and catalog
-acceptance, GPU streaming or native ARM compatibility.
+On 2026-10-08 an isolated native KVM Home Assistant OS 18.3 installation
+exercised real Supervisor Ingress and MQTT discovery using the scratch manager
+app and the official Mosquitto app. Home Assistant Core was 2026.10.0;
+Supervisor was 2026.09.2 initially and 2026.09.3 after reboot. A separate
+Debian VM ran the independently installed host toolkit and actual Wolf control
+plane. Restricted SSH enrollment, preflight, settings staging, start, restart
+and stop passed through the manager browser. The native catalog service
+published complete, acknowledged generations with two synthetic Steam manifests.
+The real HA device page observed the Wolf switch ON and both game sensors.
 
-On source revision `4615205`, 207 standard Rust tests and 13 selected disposable
-broker/root cases passed. LLVM reported 73.87% line coverage and 68.75% region
-coverage. The LCOV representation imported into local SonarQube covered
-9,613 of 12,750 Rust lines (75.40%): core 94.22%, host 77.13%, manager 71.05%.
-The different report representations have different executable-line denominators.
-All 52 Rust source-file counts were checked against imported Sonar measures.
+The documented screenshots are actual browser captures, not intercepted API
+fixtures. The manifest entries do not establish that games were installed or
+played. GPU encoding, Moonlight streaming and native ARM execution remain
+untested. Other distribution evidence remains container-only as listed in the
+README.
 
-The full mixed-language project measured 68.5%, including JavaScript and Python
-source without imported execution coverage. An explicitly configured local
-overall-coverage gate at 80% failed. This local gate is separate from the hosted
-project's quality-gate configuration. Coordinator and installer coverage remain
-priorities; these measurements are a baseline, not release approval. Coverage
-must be regenerated after subsequent fixes and additional safety tests.
+Manager updates retained the same Supervisor `/data` mapping, byte-verified cold
+backups and previous images. Native host upgrades retained reviewed installer
+plans and preimages. No household service or persistent game data was used.
 
-Actual host-fixture failures found regression gaps in fresh Wolf configuration
-paths, terminal newlines in public-key files and repeated effective SSH
-`AcceptEnv` directives during installed-policy validation. The environment
-restriction still refuses any additional client variable or wildcard; repeated
-identical sentinel directives grant no extra authority.
-
-The follow-up snapshot on `9f8b568` passed 214 standard tests and the same
-13 selected opt-in cases. Rust LCOV increased to 9,797/12,768 lines (76.73%);
-manager coverage increased to 74.37% and coordinator coverage to 94.6%.
-Overall Sonar coverage increased to 69.7%, while new-code coverage was 94.7%.
-These measurements precede the subsequently discovered native OpenSSH and
-systemd catalog compatibility fixes. High line coverage does not prove that a
-faithful protocol fixture exercises every message ordering seen on a real host.
-
-The actual Debian VM demonstrated that OpenSSH sends a channel-window update
-before exec acceptance. RPC input must still wait for explicit exec success.
-The catalog sandbox also returned `ENOSYS` with `RestrictSUIDSGID=yes`:
+Compatibility regressions cover upstream Wolf's fresh configuration mapping,
+normal public-key file endings, duplicate bounded SSH environment directives,
+OpenSSH window updates before exec confirmation and inactive missing containers
+being available OFF in MQTT. Unknown or inconsistent observations remain
+unavailable. The catalog unit disables `RestrictSUIDSGID` because
 [systemd documents](https://github.com/systemd/systemd/blob/main/man/systemd.exec.xml)
-that this restriction blocks `openat2` entirely. The catalog unit explicitly
-disables that incompatible restriction while retaining its non-root UID,
-`NoNewPrivileges`, protected filesystem and guarded descriptor-based I/O.
+that it blocks the guarded `openat2` I/O used by the service; the non-root UID,
+`NoNewPrivileges` and protected filesystem remain enforced.
+
+## Coverage scope
+
+Measure full-workspace Rust coverage and documented opt-in broker/root cases
+against a frozen source revision. Keep raw evidence private. Verify each imported
+Rust source file's executable/uncovered-line counts against LCOV rather than
+accepting a project-wide number as proof of successful Rust ingestion.
+
+LLVM summary lines/regions and Sonar LCOV lines have distinct denominators.
+Report both clearly; new-code coverage is a separate metric from overall
+coverage. JavaScript/Python coverage must be measured and imported separately.
+High line coverage does not replace real OS, protocol-ordering, crash-safety or
+streaming checks. A configured overall-coverage gate must be reported honestly
+when it fails.
+
+The frozen `66f0867` run passed 220 standard tests and 14 selected
+broker/root cases; workspace Clippy passed with warnings denied. Rust LCOV
+covered 9,970/12,897 lines (77.30%): core 94.22%, host 77.01%, manager 75.67%.
+Coordinator coverage was 94.6%, SSH 94.0%, authentication 93.9%, MQTT 82.3%
+and installer 71.1%. All 52 Rust source-file counts matched the imported
+Sonar measures for the same revision. Integration-test files are excluded
+from the Rust source report; inline test modules in source files remain included.
+
+Full-project Sonar coverage was 70.3% (9,970/14,176) and the explicit local
+overall 80% comparison failed. New-code coverage was 100%, a separate metric.
+The analysis reported 70 maintainability findings and zero reported bugs,
+vulnerabilities or security hotspots; this does not establish absence of defects.
+Installer failure paths, browser/Python coverage, branch coverage and native
+ARM/GPU streaming remain verification gaps.

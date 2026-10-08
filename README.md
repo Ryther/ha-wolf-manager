@@ -30,7 +30,7 @@ upstream components.
 | Distribution family | Container checks | Direct OS / GPU streaming |
 | --- | --- | --- |
 | Arch / CachyOS | Passed restricted SSH, sudo and offline unit checks | Not tested |
-| Debian / Ubuntu LTS | Passed restricted SSH, sudo and offline unit checks | Not tested |
+| Debian / Ubuntu LTS | Passed restricted SSH, sudo and offline unit checks | Debian VM: installer, systemd catalog and Wolf control plane passed; Ubuntu and GPU streaming not tested |
 | Fedora | Passed restricted SSH, sudo and offline unit checks | Not tested |
 | openSUSE Leap / Tumbleweed | Passed restricted SSH, sudo and offline unit checks | Not tested |
 
@@ -39,6 +39,13 @@ image digests. Containers do not prove systemd boot, hardware permissions,
 SELinux behavior or streaming compatibility. The manager and host toolkit target
 amd64 and arm64; the verified upstream Wolf stable image is currently amd64-only.
 An ARM toolkit build does not establish an ARM Wolf deployment.
+
+The [Home Assistant interface captures](docs/guides/home-assistant.md#verified-local-interface)
+show actual Supervisor Ingress and MQTT discovery on an isolated HAOS VM.
+Restricted SSH enrollment, settings staging and Wolf start/restart/stop were
+exercised against a separate Debian VM with synthetic Steam catalog manifests.
+See the [test matrix](docs/contracts/test-matrix.md) for source revisions,
+coverage and remaining limits.
 
 ## Development
 

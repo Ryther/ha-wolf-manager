@@ -30,3 +30,14 @@ If you publish raw commands, the topic is `wolf-manager/v1/<pc-id>/service/comma
 Use separate broker identities for the manager, each host publisher, and Home Assistant. [Example Mosquitto ACLs](https://github.com/Ryther/ha-wolf-manager/blob/main/examples/mqtt/acl.example) show the fixed `gaming-pc` namespace. Replace usernames and PC IDs and merge them with your broker policy; the file contains no passwords. The host discovery ACL intentionally enumerates two example app IDs: extend it with every authorized installed game (and retain removed IDs until their cleanup is acknowledged). MQTT wildcards match whole topic levels, so a partial `wolf_manager_<pc>_game_+` pattern does not restrict a host correctly. Do not broaden it to every sensor to bypass this requirement. See the [official Mosquitto ACL syntax](https://mosquitto.org/man/mosquitto-conf-5.html). Do not grant a host publisher access to service command topics or other PCs. The manager needs command subscription, observed catalog subscription, discovery publication and manager/service availability publication. Home Assistant needs discovery/state reads and non-retained service command writes.
 
 Keep broker backups and TLS credentials separate from the manager backup. For Supervisor backup, the add-on declares a cold backup so its process is stopped while state is captured. Also keep a verified manager bundle for independent recovery; see [backup and recovery](backup-recovery.md).
+
+## Verified local interface
+
+The following captures show the real manager panel and discovered MQTT device
+on an isolated HAOS test installation. The two games use synthetic manifests;
+GPU streaming and game execution were not exercised. See the
+[test evidence and limits](../contracts/test-matrix.md).
+
+![Manager inside actual Home Assistant Ingress](../images/home-assistant-manager.png)
+
+![Actual Home Assistant MQTT device and observed Wolf switch](../images/home-assistant-device.png)
