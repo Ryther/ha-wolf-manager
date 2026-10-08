@@ -27,7 +27,7 @@
   ],
   "wolf_config": {
     "root": "/etc/wolf",
-    "relative_path": "config.toml",
+    "relative_path": "cfg/config.toml",
     "uid": 0,
     "gid": 0
   },

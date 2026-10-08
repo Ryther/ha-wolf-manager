@@ -91,3 +91,17 @@ Rollback checks recorded identities and preimages. Preserve backups when it refu
 Each authorized `container_userdata_paths` destination must end in `userdata`. Its parent determines the corresponding `config/config.vdf` destination; the toolkit explicitly binds the policy's real host `config_vdf` there. Verify this mapping against the runner's actual Steam layout, not just its userdata mount. Conflicting pre-existing runner mounts are rejected so a generated game cannot silently read a different Steam profile. Include actual helper executables in `steam_executables`; naming only a shell wrapper does not describe every writer. Native Steam process names for the Steam UID are additionally refused conservatively.
 
 The icon cache must be reachable through the single authorized Wolf configuration-root bind mapping. The toolkit validates that no other mount shadows the cache destination, converts bounded source images to PNG and retains valid cached entries. Do not add overlapping mounts or create untrusted files at generated cache paths to work around a missing cover.
+
+## Fresh Wolf configuration mapping
+
+Fresh installations require `wolf_config.relative_path` to be `cfg/config.toml`.
+The upstream startup script derives this path from `HOST_APPS_STATE_FOLDER` and
+overrides `WOLF_CFG_FILE`. The default Compose file therefore binds the granted
+Wolf directory at the same absolute path inside the container and sets
+`HOST_APPS_STATE_FOLDER` to that path. Configuration, `key.pem` and `cert.pem`
+remain under its `cfg` directory; the whole-directory bind keeps atomic updates
+visible. A different fresh configuration path is refused before writes.
+
+Adoption retains the existing Compose and configuration mapping. Verify where
+your running upstream image actually reads configuration before granting that
+path; do not relocate existing identity, pairings or certificates for adoption.
