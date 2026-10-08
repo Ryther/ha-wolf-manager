@@ -926,6 +926,16 @@ fn validate_ssh_policy_tree(path: &Path, include_base: &Path) -> io::Result<()> 
         0,
     )
 }
+fn bounded_client_environment(environment: &[&str]) -> bool {
+    // OpenSSH accumulates repeated AcceptEnv directives, including when the
+    // installed drop-in is also appended for prospective validation. Repeated
+    // identical sentinels grant no additional client environment variables.
+    !environment.is_empty()
+        && environment
+            .iter()
+            .all(|value| *value == "acceptenv WOLF_MANAGER_UNUSED_ENV")
+}
+
 fn validate_configs(folder: &Path, recipes: &[Recipe]) -> io::Result<()> {
     validate_ssh_policy_tree(Path::new("/etc/ssh/sshd_config"), Path::new("/etc/ssh"))?;
     let sudo = recipes
@@ -992,7 +1002,7 @@ fn validate_configs(folder: &Path, recipes: &[Recipe]) -> io::Result<()> {
         .map(String::as_str)
         .filter(|line| line.starts_with("acceptenv "))
         .collect::<Vec<_>>();
-    if environment != ["acceptenv WOLF_MANAGER_UNUSED_ENV"] {
+    if !bounded_client_environment(&environment) {
         return Err(fail("inherited client environment policy is not bounded"));
     }
     if normalized
@@ -2008,6 +2018,21 @@ fn rollback_with(plan: &InstallPlan, environment: &Environment) -> io::Result<In
 
 #[cfg(test)]
 mod root_fixture_tests {
+    #[test]
+    fn repeated_effective_acceptenv_remains_bounded() {
+        let sentinel = "acceptenv WOLF_MANAGER_UNUSED_ENV";
+        assert!(super::bounded_client_environment(&[sentinel]));
+        assert!(super::bounded_client_environment(&[sentinel, sentinel]));
+        for invalid in [
+            vec![],
+            vec!["acceptenv *"],
+            vec![sentinel, "acceptenv LANG"],
+            vec!["acceptenv WOLF_MANAGER_UNUSED_ENV LD_PRELOAD"],
+        ] {
+            assert!(!super::bounded_client_environment(&invalid));
+        }
+    }
+
     use super::*;
     struct RootFixture {
         directory: tempfile::TempDir,

@@ -44,3 +44,32 @@ Crash tests for a stage-then-restart parent: before stage send, after stage send
 ## Verified stage-only completion
 
 If staging is independently verified succeeded and the planned primary child remains durably not_dispatched, reconciliation terminates the parent as failed with code primary_not_dispatched and explicit stage_succeeded evidence. Desired/staged revision is visible, running revision remains the observed prior value. This is verified partial execution, never parent success or non-execution. No replay occurs; a subsequent explicit user action is a new operation after reconciliation. Any other possibly dispatched child must be terminally evidenced first; otherwise the parent remains unknown_interrupted. Test the crash after stage acknowledgment but before primary sending is committed.
+
+## Local acceptance snapshot — 2026-10-08
+
+An isolated native KVM Home Assistant OS 18.3 VM with Supervisor 2026.09.2,
+Core 2026.10.0 and Mosquitto app 7.1.1 installed and started the local manager
+app using its scratch Dockerfile. Real authenticated Supervisor Ingress, the
+sidebar shortcut, PC creation and host-key enrollment were exercised through
+the browser. These checks do not yet establish complete lifecycle and catalog
+acceptance, GPU streaming or native ARM compatibility.
+
+On source revision `4615205`, 207 standard Rust tests and 13 selected disposable
+broker/root cases passed. LLVM reported 73.87% line coverage and 68.75% region
+coverage. The LCOV representation imported into local SonarQube covered
+9,613 of 12,750 Rust lines (75.40%): core 94.22%, host 77.13%, manager 71.05%.
+The different report representations have different executable-line denominators.
+All 52 Rust source-file counts were checked against imported Sonar measures.
+
+The full mixed-language project measured 68.5%, including JavaScript and Python
+source without imported execution coverage. An explicitly configured local
+overall-coverage gate at 80% failed. This local gate is separate from the hosted
+project's quality-gate configuration. Coordinator and installer coverage remain
+priorities; these measurements are a baseline, not release approval. Coverage
+must be regenerated after subsequent fixes and additional safety tests.
+
+Actual host-fixture failures found regression gaps in fresh Wolf configuration
+paths, terminal newlines in public-key files and repeated effective SSH
+`AcceptEnv` directives during installed-policy validation. The environment
+restriction still refuses any additional client variable or wildcard; repeated
+identical sentinel directives grant no extra authority.

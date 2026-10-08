@@ -49,6 +49,15 @@ python -m pip install --only-binary ':all:' -r docs/requirements.txt
 python -m mkdocs build --strict
 ```
 
+Measure Rust coverage with the verified `cargo-llvm-cov` tool from
+`scripts/ci/versions.json`, keeping reports under ignored `_tmp/`. For example,
+`cargo llvm-cov --locked --workspace --lcov --output-path _tmp/rust.lcov`.
+Run documented opt-in broker/root fixtures only in disposable environments.
+Report executable-line denominators, component gaps and exclusions; a passing
+Sonar analysis without imported coverage is insufficient. Rust-only reports do
+not measure browser or Python execution, and line coverage does not establish
+crash safety or branch coverage.
+
 Run focused meaningful checks during development and affected required checks
 before completion. Browser API fixtures prove the browser contract; they do not
 prove live backend, Home Assistant or streaming compatibility. Root installer
