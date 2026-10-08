@@ -1,0 +1,27 @@
+# Mosquitto ACL example: adapt identities and each fixed PC ID.
+# This file does not create users or passwords.
+user wolf-host-gaming-pc
+topic read homeassistant/status
+topic write wolf-manager/v1/gaming-pc/host/availability
+topic write wolf-manager/v1/gaming-pc/catalog/#
+# Enumerate authorized app IDs; extend this list before publishing other games.
+topic write homeassistant/sensor/wolf_manager_gaming-pc_game_570/config
+topic write homeassistant/sensor/wolf_manager_gaming-pc_game_730/config
+
+user wolf-manager
+topic read wolf-manager/v1/+/host/availability
+topic read wolf-manager/v1/+/catalog/#
+topic read wolf-manager/v1/+/service/command
+topic read homeassistant/status
+topic write wolf-manager/v1/manager/+/availability
+topic write wolf-manager/v1/+/service/availability
+topic write wolf-manager/v1/+/service/state
+topic write wolf-manager/v1/+/service/attributes
+topic write wolf-manager/v1/+/service/result
+topic write homeassistant/switch/+/config
+
+user home-assistant
+topic read homeassistant/#
+topic read wolf-manager/v1/#
+topic write homeassistant/status
+topic write wolf-manager/v1/+/service/command

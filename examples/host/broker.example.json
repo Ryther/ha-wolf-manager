@@ -1,0 +1,12 @@
+{
+  "host": "mqtt.example.net",
+  "port": 8883,
+  "client_id": "wolf-manager-host-gaming-pc",
+  "username_file": "/home/gamer/.local/state/wolf-manager/mqtt-username",
+  "password_file": "/home/gamer/.local/state/wolf-manager/mqtt-password",
+  "tls": true,
+  "ca_file": null,
+  "pc_name": "Gaming PC",
+  "topic_base": "wolf-manager/v1",
+  "discovery_prefix": "homeassistant"
+}

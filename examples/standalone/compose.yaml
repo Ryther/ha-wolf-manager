@@ -1,0 +1,20 @@
+services:
+  wolf-manager:
+    image: ${WOLF_MANAGER_IMAGE:?Set a verified release image digest in .env}
+    user: "1000:1000"
+    restart: unless-stopped
+    ports:
+      - "${WOLF_MANAGER_BIND_IP:-127.0.0.1}:8099:8099"
+    environment:
+      WOLF_MODE: standalone
+      WOLF_DATA_DIR: /data
+      WOLF_LISTEN: 0.0.0.0:8099
+      WOLF_PUBLIC_ORIGIN: ${WOLF_PUBLIC_ORIGIN:?Set the browser HTTPS origin}
+      WOLF_BOOTSTRAP_TOKEN_FILE: /run/wolf-secrets/bootstrap-token
+      WOLF_TLS_CERT_FILE: /run/wolf-secrets/tls-cert.pem
+      WOLF_TLS_KEY_FILE: /run/wolf-secrets/tls-key.pem
+      WOLF_MQTT_DISABLED: "true"
+    volumes:
+      - ./data:/data
+      - ./secrets:/run/wolf-secrets:ro
+      - ./backups:/backups

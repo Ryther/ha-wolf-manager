@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "pc_id": "gaming-pc",
+  "steam_uid": 1000,
+  "steam_gid": 1000,
+  "libraries": [
+    {
+      "library_id": "primary",
+      "steamapps_path": "/home/gamer/Steam/steamapps",
+      "container_paths": [
+        "/home/steam/Steam/steamapps"
+      ]
+    }
+  ],
+  "steam_profiles": [
+    {
+      "root": "/home/gamer/Steam",
+      "config_vdf": "config/config.vdf",
+      "libraryfolders_vdf": [
+        "steamapps/libraryfolders.vdf"
+      ],
+      "userdata_directory": "userdata",
+      "container_userdata_paths": [
+        "/home/steam/Steam/userdata"
+      ]
+    }
+  ],
+  "wolf_config": {
+    "root": "/etc/wolf",
+    "relative_path": "config.toml",
+    "uid": 0,
+    "gid": 0
+  },
+  "compose_file": "/etc/wolf/compose.yaml",
+  "service_unit": "wolf.service",
+  "container_name": "wolf",
+  "image_ref": "REPLACE_WITH_VERIFIED_WOLF_IMAGE",
+  "backup_root": "/var/lib/wolf-manager/backups",
+  "state_root": "/var/lib/wolf-manager/state",
+  "catalog_state_directory": "/home/gamer/.local/state/wolf-manager",
+  "broker_secret_file": null,
+  "pull_on_start": true,
+  "pull_timeout_seconds": 60,
+  "proton": null,
+  "steam_executables": [
+    "/usr/bin/steam"
+  ],
+  "steam_runner": {
+    "type": "docker",
+    "image": "REPLACE_WITH_VERIFIED_STEAM_IMAGE"
+  }
+}
