@@ -23,6 +23,14 @@ pub fn generate(
     catalog: &BTreeMap<AppId, CatalogAttributes>,
     template: &toml::Table,
 ) -> io::Result<(String, String)> {
+    generate_with_icons(settings, catalog, template, &BTreeMap::new())
+}
+pub fn generate_with_icons(
+    settings: &Settings,
+    catalog: &BTreeMap<AppId, CatalogAttributes>,
+    template: &toml::Table,
+    icons: &BTreeMap<AppId, String>,
+) -> io::Result<(String, String)> {
     settings.validate().map_err(|_| invalid())?;
     if template.get("type").and_then(toml::Value::as_str) != Some("docker")
         || template
@@ -61,7 +69,9 @@ pub fn generate(
             ("title".into(), toml::Value::String(entry.name.clone())),
             (
                 "icon_png_path".into(),
-                toml::Value::String(entry.cover_url.clone()),
+                toml::Value::String(icons.get(id).cloned().unwrap_or_else(|| {
+                    "https://games-on-whales.github.io/wildlife/apps/steam/assets/icon.png".into()
+                })),
             ),
             (
                 "start_virtual_compositor".into(),

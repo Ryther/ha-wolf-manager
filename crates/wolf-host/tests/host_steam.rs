@@ -112,7 +112,7 @@ fn policy_adapter_overlays_userdata_and_library_aliases_then_restores_pairing_sa
     )
     .unwrap();
     fs::write(root.join("bin/steam"), b"fixture executable identity").unwrap();
-    fs::write(root.join("wolf/compose.json"), b"{}").unwrap();
+    fs::write(root.join("wolf/compose.json"), serde_json::to_vec(&serde_json::json!({"services":{"wolf":{"container_name":"wolf","volumes":[format!("{}:/etc/wolf:rw",root.join("wolf").display())]}}})).unwrap()).unwrap();
     fs::write(root.join("wolf/config.toml"),b"config_version=7\nuuid='identity'\npaired_clients=['original']\n[[profiles]]\nid='moonlight-profile-id'\n[[profiles]]\nid='user'\n[[profiles.apps]]\ntitle='custom-app'\n").unwrap();
     let policy:RootPolicy=serde_json::from_value(serde_json::json!({"version":1,"pc_id":"fixture","steam_uid":1000,"steam_gid":1000,"libraries":[{"library_id":"primary","steamapps_path":root.join("profile/steamapps"),"container_paths":["/home/steam/Steam/steamapps","/home/steam/.steam/steam/steamapps"]}],"steam_profiles":[{"root":root.join("profile"),"config_vdf":"config/config.vdf","libraryfolders_vdf":["steamapps/libraryfolders.vdf"],"userdata_directory":"userdata","container_userdata_paths":["/home/steam/Steam/userdata","/home/steam/.steam/steam/userdata"]}],"wolf_config":{"root":root.join("wolf"),"relative_path":"config.toml","uid":0,"gid":0},"compose_file":root.join("wolf/compose.json"),"service_unit":"wolf.service","container_name":"wolf","image_ref":"ghcr.io/games-on-whales/wolf:stable","backup_root":root.join("backups"),"state_root":root.join("state"),"catalog_state_directory":root.join("catalog"),"broker_secret_file":null,"pull_on_start":true,"pull_timeout_seconds":60,"proton":{"name":"proton-cachyos","host_path":root.join("proton"),"container_paths":["/home/steam/.steam/root/compatibilitytools.d/proton-cachyos"]},"steam_executables":[root.join("bin/steam")],"steam_runner":{"type":"docker","image":"example.invalid/steam:stable","mounts":["/var/run/wolf/wolf.sock:/var/run/wolf/wolf.sock"]}})).unwrap();
     let mut settings = wolf_core::Settings::default();
@@ -155,6 +155,26 @@ fn policy_adapter_overlays_userdata_and_library_aliases_then_restores_pairing_sa
             .unwrap()
             .contains("/home/steam/.steam/steam/userdata:rw")
     }));
+    assert!(mounts.iter().any(|mount| mount.as_str()
+        == Some(&format!(
+            "{}:/home/steam/Steam/config/config.vdf:rw",
+            root.join("profile/config/config.vdf").display()
+        ))));
+    let mapped = mounts
+        .iter()
+        .find_map(|m| {
+            let m = m.as_str()?;
+            m.ends_with(":/home/steam/Steam/config/config.vdf:rw")
+                .then(|| m.split(':').next().unwrap())
+        })
+        .unwrap();
+    assert!(
+        fs::read_to_string(mapped)
+            .unwrap()
+            .contains("proton-cachyos")
+    );
+    let icon = fs::read(root.join("wolf/.ha-wolf-manager-icons/10.png")).unwrap();
+    assert!(icon.starts_with(b"\x89PNG\r\n\x1a\n"));
     let wolf = root.join("wolf/config.toml");
     let generated = fs::read_to_string(&wolf).unwrap();
     assert!(generated.contains("Fixture game"));
@@ -219,4 +239,32 @@ fn policy_adapter_overlays_userdata_and_library_aliases_then_restores_pairing_sa
         root.join("backups").read_dir().unwrap().count(),
         before_backups
     );
+}
+
+#[test]
+fn configured_profile_vdf_is_mounted_beside_each_authorized_userdata_alias() {
+    use wolf_manager_host::{host_steam::runner, policy::RootPolicy};
+    let mut policy:RootPolicy=serde_json::from_value(serde_json::json!({"version":1,"pc_id":"fixture","steam_uid":1000,"steam_gid":1000,"libraries":[],"steam_profiles":[{"root":"/profile","config_vdf":"config/config.vdf","libraryfolders_vdf":[],"userdata_directory":"userdata","container_userdata_paths":["/home/steam/Steam/userdata","/home/steam/.steam/steam/userdata"]}],"wolf_config":{"root":"/wolf","relative_path":"config.toml","uid":0,"gid":0},"compose_file":"/wolf/compose.json","service_unit":"wolf.service","container_name":"wolf","image_ref":"example.invalid/wolf:stable","backup_root":"/private/backups","state_root":"/private/state","catalog_state_directory":"/private/catalog","broker_secret_file":null,"pull_on_start":false,"pull_timeout_seconds":60,"proton":null,"steam_executables":[],"steam_runner":{"type":"docker","image":"example.invalid/steam:stable","mounts":[]}})).unwrap();
+    let result = runner(&policy).unwrap();
+    let mounts = result["mounts"].as_array().unwrap();
+    for target in [
+        "/home/steam/Steam/config/config.vdf",
+        "/home/steam/.steam/steam/config/config.vdf",
+    ] {
+        assert!(mounts.iter().any(
+            |mount| mount.as_str() == Some(&format!("/profile/config/config.vdf:{target}:rw"))
+        ));
+    }
+    policy.steam_runner.insert(
+        "mounts".into(),
+        toml::Value::Array(vec![toml::Value::String(
+            "/unrelated:/home/steam/Steam/config/config.vdf:rw".into(),
+        )]),
+    );
+    assert!(runner(&policy).is_err());
+    policy
+        .steam_runner
+        .insert("mounts".into(), toml::Value::Array(vec![]));
+    policy.steam_profiles[0].container_userdata_paths.clear();
+    assert!(runner(&policy).is_err());
 }

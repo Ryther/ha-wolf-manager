@@ -29,3 +29,31 @@ a target. `hooks::apply_expected` validates all supplied preimages before the
 first overlay and repeats the comparison for each write. An intervening change
 is a refusal; already applied overlays restore only verified postimages, retaining
 conflicting files and recovery evidence.
+
+## PNG icons and profile configuration reachability
+
+The host converts Steam cover JPEGs to actual bounded PNGs. Cache files are
+absent-only `.ha-wolf-manager-icons/<AppId>.png` inside the root-owned
+`wolf_config.root` grant (directory mode0755, regular single-link file mode0644). Existing
+valid PNGs remain byte-stable; aliases, hardlinks, wrong owners/permissions and
+unknown existing bytes refuse. No icon or staging files are automatically
+removed. A network failure creates a neutral embedded PNG; that valid fallback
+is retained on later runs rather than silently replacing existing data.
+
+Fetches regenerate the closed Steam CDN URL from validated AppId, disable
+redirects/proxies, use native Rust TLS and are bounded to 5 seconds each and 20
+seconds total. Encoded input/output is at most 4MiB; dimensions are at most 2048
+per axis and decoder allocation budget 32MiB. JPEG and PNG are the only formats.
+Production resolves an explicit Compose bind of the granted configuration root
+and uses an absolute container path; it never assumes Wolf's state-folder base.
+Missing/ambiguous mappings and submounts shadowing the cache refuse. YAML Compose
+is normalized by the fixed Docker CLI with a bounded 5-second call; deterministic
+fixtures use equivalent JSON without network activity.
+
+Every Steam profile must authorize at least one container userdata path ending
+in `userdata`. Its sibling `config/config.vdf` is mounted from that profile's
+exact granted config_vdf. Conflicting pre-existing destination mappings refuse.
+This connects compatibility-tool settings to the same container profile whose
+userdata receives launch options; no unsupported profile mapping is silently
+accepted. Container mount fixtures prove path/data correspondence, not an actual
+Steam/GPU launch or Moonlight image decoding on a physical client.

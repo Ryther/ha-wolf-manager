@@ -60,7 +60,21 @@ pub fn runner(policy: &RootPolicy) -> io::Result<toml::Table> {
         }
     }
     for profile in &policy.steam_profiles {
+        if profile.container_userdata_paths.is_empty() {
+            return Err(io::Error::other(
+                "profile config requires an authorized container userdata mapping",
+            ));
+        }
         for destination in &profile.container_userdata_paths {
+            if destination.file_name().and_then(|n| n.to_str()) != Some("userdata") {
+                return Err(invalid());
+            }
+            let base = destination.parent().ok_or_else(invalid)?;
+            insert(
+                &profile.root.join(&profile.config_vdf),
+                &base.join("config/config.vdf"),
+                "rw",
+            )?;
             insert(
                 &profile.root.join(&profile.userdata_directory),
                 destination,
@@ -140,13 +154,21 @@ pub fn prepare(policy: &RootPolicy, settings: &Settings) -> io::Result<()> {
         &mut crate::host_status::FixedTools,
         std::time::Duration::from_secs(15),
     )?;
-    prepare_with(policy, settings, || {
+    prepare_impl(policy, settings, true, || {
         crate::quiescence::require_stopped(policy.steam_uid, &policy.steam_executables)
     })
 }
 pub fn prepare_with(
     policy: &RootPolicy,
     settings: &Settings,
+    quiescent: impl Fn() -> io::Result<()>,
+) -> io::Result<()> {
+    prepare_impl(policy, settings, false, quiescent)
+}
+fn prepare_impl(
+    policy: &RootPolicy,
+    settings: &Settings,
+    online: bool,
     quiescent: impl Fn() -> io::Result<()>,
 ) -> io::Result<()> {
     policy.validate()?;
@@ -297,7 +319,15 @@ pub fn prepare_with(
         }
     }
     let trusted_runner = runner(policy)?;
-    let (moonlight, user) = crate::generated_apps::generate(settings, &inventory, &trusted_runner)?;
+    let apps = settings
+        .games
+        .iter()
+        .filter(|(id, game)| game.direct_launch && inventory.contains_key(id))
+        .map(|(id, _)| id.clone())
+        .collect::<Vec<_>>();
+    let icons = crate::icons::prepare(policy, &apps, online)?;
+    let (moonlight, user) =
+        crate::generated_apps::generate_with_icons(settings, &inventory, &trusted_runner, &icons)?;
     let wolf = Grant::for_owner(
         &policy.wolf_config.root,
         policy.wolf_config.uid,
