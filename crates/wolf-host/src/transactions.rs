@@ -332,6 +332,19 @@ impl TransactionStore {
         }
         Ok(envelope.manifest)
     }
+    fn require_parent(&self, manifest: &mut Manifest, grant: &Grant) -> io::Result<()> {
+        match manifest.parent_matches(grant) {
+            Ok(true) => Ok(()),
+            result => {
+                manifest.phase = Phase::Conflict;
+                self.save(manifest)?;
+                match result {
+                    Err(reason) => Err(reason),
+                    _ => Err(error("target parent identity changed")),
+                }
+            }
+        }
+    }
     pub fn transactions(&self) -> io::Result<Vec<Uuid>> {
         let mut ids = Vec::new();
         for entry in fs::read_dir(&self.root)? {
@@ -431,11 +444,7 @@ impl TransactionStore {
         self.preimage(&id)?;
         let staged = format!(".wolf-manager-{id}.staged");
         grant.write_new(&parent, &staged, bytes, manifest.mode, &manifest.attributes)?;
-        if !manifest.parent_matches(grant)? {
-            manifest.phase = Phase::Conflict;
-            self.save(&manifest)?;
-            return Err(error("target parent identity changed before application"));
-        }
+        self.require_parent(&mut manifest, grant)?;
         rustix::fs::renameat_with(
             &parent,
             &name,
@@ -467,11 +476,7 @@ impl TransactionStore {
         // NOREPLACE never overwrites a file introduced by another writer.
         rustix::fs::renameat_with(&parent, &staged, &parent, &name, RenameFlags::NOREPLACE)?;
         parent.sync_all()?;
-        if !manifest.parent_matches(grant)? {
-            manifest.phase = Phase::Conflict;
-            self.save(&manifest)?;
-            return Err(error("target parent identity changed during application"));
-        }
+        self.require_parent(&mut manifest, grant)?;
         manifest.phase = Phase::Applied;
         self.save(&manifest)?;
         Ok(id)
@@ -503,11 +508,7 @@ impl TransactionStore {
                 return Err(reason);
             }
         };
-        if !manifest.parent_matches(grant)? {
-            manifest.phase = Phase::Conflict;
-            self.save(&manifest)?;
-            return Err(error("target parent identity changed; refusing restore"));
-        }
+        self.require_parent(&mut manifest, grant)?;
         let current = grant.read_file(&parent, &name);
         if let Ok(snapshot) = &current
             && manifest.matches(snapshot, &manifest.preimage_sha256)
@@ -581,11 +582,7 @@ impl TransactionStore {
         if !manifest.matches(&grant.read_file(&parent, &name)?, &manifest.preimage_sha256) {
             return Err(error("restore verification failed"));
         }
-        if !manifest.parent_matches(grant)? {
-            manifest.phase = Phase::Conflict;
-            self.save(&manifest)?;
-            return Err(error("target parent identity changed during restore"));
-        }
+        self.require_parent(&mut manifest, grant)?;
         manifest.phase = Phase::Restored;
         self.save(&manifest)
     }
