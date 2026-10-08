@@ -1,0 +1,43 @@
+name: Bug report
+description: Report a reproducible functional problem with sanitized evidence.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: "For suspected vulnerabilities, follow SECURITY.md. Do not attach credentials, private state, recovery bundles or household configuration."
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Include the exact image digest or host release when relevant.
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Manager deployment
+      options:
+        - Standalone HTTPS
+        - Home Assistant Ingress add-on
+        - Development fixture
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction and expected behavior
+      description: Describe steps using synthetic identifiers and the observed result.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized observations
+      description: Include timestamps, availability, revision relationships, operation state and relevant bounded logs. Redact private identifiers and addresses.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment and checks
+      description: Include OS/architecture, Docker/HA mode and which disposable checks reproduced the problem. Distinguish container-only and direct-OS observations.

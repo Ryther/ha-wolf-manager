@@ -1,0 +1,27 @@
+name: Feature request
+description: Describe an operational need and the intended outcome.
+title: "[Feature]: "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: Explain the current workflow and its concrete limitation.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired behavior
+      description: Include the intended operator flow and how success would be observed.
+    validations:
+      required: true
+  - type: textarea
+    id: boundaries
+    attributes:
+      label: Compatibility and preservation constraints
+      description: Mention deployment mode, multiple PCs and data/permissions that must remain intact. Use synthetic examples.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
