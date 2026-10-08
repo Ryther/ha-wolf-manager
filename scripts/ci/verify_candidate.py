@@ -28,6 +28,7 @@ REQUIRED_CHECKS = frozenset((
     'codeql', 'secrets', 'cargo-audit', 'image-scan-amd64', 'image-scan-arm64', 'sonar',
 ))
 TRIPLES = {'x86_64-unknown-linux-musl': 62, 'aarch64-unknown-linux-musl': 183}
+HOST_LICENSES = frozenset({'licenses/HA-Wolf-Manager.txt', 'licenses/rumqttc.txt'})
 HEX64 = re.compile(r'[\da-f]{64}\Z', re.ASCII)
 HEX40 = re.compile(r'[\da-f]{40}\Z', re.ASCII)
 SEMVER = re.compile(r'(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)\Z', re.ASCII)
@@ -320,7 +321,10 @@ def inspect_tar_file(archive, entry, name, binary_machine):
 
 def validate_tar_target(entry, name, binary_machine):
     if binary_machine:
-        require((name == 'bin' and entry.isdir()) or (name == 'bin/wolf-manager-host' and entry.isfile()), 'unsupported_host_entry')
+        require((name in ('bin', 'licenses') and entry.isdir()) or
+                (name == 'bin/wolf-manager-host' and entry.isfile()) or
+                (name in HOST_LICENSES and entry.isfile() and entry.mode == 0o444),
+                'unsupported_host_entry')
     else:
         require(name in ('installer', 'installer/templates', 'install.sh') or name.startswith('installer/templates/') or name == 'installer/metadata.json', 'unsupported_installer_entry')
 
@@ -348,6 +352,8 @@ def inspect_tar(data, binary_machine=None):
     except (tarfile.TarError, OSError, EOFError):
         raise VerificationError('malformed_archive') from None
     require(executable and (binary_machine or template), 'archive_required_target')
+    if binary_machine:
+        require(HOST_LICENSES <= names, 'archive_required_licenses')
 
 
 def verify_oci(files, image):

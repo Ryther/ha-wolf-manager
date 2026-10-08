@@ -70,5 +70,6 @@ recovery checks against your only copy of Steam or Wolf data. Review the propose
 storage mapping and verified recovery path before applying a host plan.
 
 Code has been developed with AI assistance and requires review and measured
-validation. See [LICENSE](LICENSE) for the MIT license. Wolf is an independent
+validation. Owned code uses the [MIT license](LICENSE); the vendored MQTT crate
+retains its [Apache 2.0 license](vendor/rumqttc/LICENSE). Wolf is an independent
 upstream project; this manager does not imply upstream endorsement.

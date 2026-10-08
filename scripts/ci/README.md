@@ -69,8 +69,11 @@ foreign-SHA or failed job substitutes for that name. Protected check jobs must
 actually verify the exact bundle subjects they attest; receipt strings and
 candidate-authored reports are not independent quality-gate authority.
 
-Host archives allow only the executable `bin/wolf-manager-host` plus optional
-`bin/` directory. ELF target machine, bounds, executable load segment, absence
+Host archives require the executable `bin/wolf-manager-host` and the exact
+read-only regular files `licenses/HA-Wolf-Manager.txt` and `licenses/rumqttc.txt`,
+plus optional `bin/` and `licenses/` directories. Other license names, links,
+writable or executable license files are refused. ELF target machine, bounds,
+executable load segment, absence
 of PT_INTERP and absence of DT_NEEDED are verified. Installer archives contain
 executable POSIX `install.sh`, `installer/templates/**`, optional directory
 entries and optional `installer/metadata.json`. No links, devices, traversal,

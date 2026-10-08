@@ -65,7 +65,10 @@ The published archive omitted the license file; the included Apache 2.0
 `f1e9e8d558783f942993046679cdf3c8c3a3d36b`, with SHA-256
 `cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30`.
 The vendored crate is excluded from workspace membership; its upstream tests are
-not represented as product tests or product coverage.
+not represented as product tests or product coverage. Each published host archive
+includes the owned MIT license and the vendored Apache 2.0 license as read-only
+files; the scratch image preserves `/LICENSE` and includes
+`/licenses/rumqttc.txt`.
 
 [Upstream PR 1037](https://github.com/bytebeamio/rumqtt/pull/1037) proposes the
 same dependency-series correction, but was still open when checked. Remove the
