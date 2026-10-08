@@ -24,8 +24,9 @@ mod commands;
 
 pub mod rpc;
 
-pub mod host_status;
-pub mod host_runtime;
-pub mod host_steam;
-pub mod cli;
 pub mod catalog_daemon;
+pub mod cli;
+pub mod host_runtime;
+pub mod host_status;
+pub mod host_steam;
+pub mod icons;

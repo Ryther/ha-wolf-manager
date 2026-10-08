@@ -38,6 +38,7 @@ webpki-roots = "1.0.9"
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"] }
 rustls-pemfile = "2.2.0"
 hyper-util = { version = "0.1.21", features = ["server-auto", "service", "tokio"] }
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
 
 unicode-normalization = "0.1.25"
 unicode-general-category = "1.1.0"

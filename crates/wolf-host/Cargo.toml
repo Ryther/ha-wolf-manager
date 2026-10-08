@@ -25,6 +25,8 @@ rustls-pemfile.workspace = true
 url.workspace = true
 unicode-normalization.workspace = true
 unicode-general-category.workspace = true
+image.workspace = true
+reqwest = { workspace = true, features = ["blocking"] }
 
 [dev-dependencies]
 tempfile.workspace = true
