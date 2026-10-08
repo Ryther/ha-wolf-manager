@@ -37,3 +37,49 @@ tests collect Chromium V8 execution; `v8-to-istanbul` 9.3.0 converts those repor
 and its own measured Node execution to LCOV. Both are development-only tools;
 the scratch runtime contains no Python or Node interpreter. Pins and primary
 release sources are recorded in `scripts/ci/versions.json`.
+
+## Temporary MQTT TLS dependency patch
+
+On 2026-10-09, GitHub dependency analysis identified four advisories against the
+`rustls-webpki` 0.102.8 dependency declared by the latest stable `rumqttc` 0.25.1:
+GHSA-82j2-j2ch-gfr8, GHSA-xgp8-3hg3-c2mh, GHSA-965h-392x-2mh5 and
+GHSA-pwjx-qhcg-rvj4. The separately resolved Rustls dependency already used
+0.103.15; that did not remove the older MQTT dependency.
+
+The workspace temporarily patches `rumqttc` to `vendor/rumqttc`. Its source is the
+[canonical published 0.25.1 archive](https://crates.io/crates/rumqttc/0.25.1),
+verified against the registry checksum:
+`0feff8d882bff0b2fddaf99355a10336d43dd3ed44204f85ece28cf9626ab519`.
+The active normalized `Cargo.toml` changes only the `rustls-webpki` requirement
+from 0.102.8 to 0.103.15. Upstream runtime source remains unchanged, and the
+workspace retains `use-rustls-no-provider` and the explicit ring provider.
+The original manifest remains available as `Cargo.toml.orig` for provenance.
+Trailing spaces in the upstream `CHANGELOG.md` and `design.md` are normalized
+for repository whitespace checks; executable source remains byte-identical.
+The archive's standalone `Cargo.lock` is intentionally omitted: the product root
+lockfile is the only authoritative resolved graph, and the unused upstream
+lockfile still records vulnerable historical dependencies. The verified original
+archive is retained privately for comparison.
+The published archive omitted the license file; the included Apache 2.0
+`LICENSE` is copied from the archive's recorded upstream commit
+`f1e9e8d558783f942993046679cdf3c8c3a3d36b`, with SHA-256
+`cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30`.
+The vendored crate is excluded from workspace membership; its upstream tests are
+not represented as product tests or product coverage.
+
+[Upstream PR 1037](https://github.com/bytebeamio/rumqtt/pull/1037) proposes the
+same dependency-series correction, but was still open when checked. Remove the
+local patch and vendored source after a stable upstream release includes a
+fixed WebPKI requirement. Verify the replacement's complete lock diff, MQTT TLS
+and reconnect behavior, dependency audit, and both native architectures before
+removing this fallback. Do not ignore or dismiss the advisories instead of
+removing the vulnerable dependency.
+
+Verification with pinned `cargo-audit` 0.22.2 and the current RustSec database
+reported zero vulnerabilities in the product lockfile. The informational
+`rustls-pemfile` 2.2.0 maintenance advisory remains; its documented compatibility
+pin is separate from the removed WebPKI vulnerabilities. Workspace tests,
+strict Clippy, native MQTT TLS certificate acceptance/refusal, and four
+disposable MQTT5 reconnect/discovery/shutdown fixtures passed. These local checks
+do not replace the release candidate's independent native architecture and
+security jobs.
