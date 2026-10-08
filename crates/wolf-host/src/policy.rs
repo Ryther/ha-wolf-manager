@@ -154,36 +154,8 @@ impl RootPolicy {
         {
             return Err(fail("invalid unit, container or image reference"));
         }
-        let mut ids = BTreeSet::new();
-        let mut paths = BTreeSet::new();
-        for library in &self.libraries {
-            if !identifier(&library.library_id, 64)
-                || !ids.insert(&library.library_id)
-                || !paths.insert(&library.steamapps_path)
-                || library.container_paths.is_empty()
-            {
-                return Err(fail("duplicate or invalid library grant"));
-            }
-            absolute(&library.steamapps_path)?;
-            for path in &library.container_paths {
-                absolute(path)?;
-            }
-        }
-        let mut profile_roots = BTreeSet::new();
-        for profile in &self.steam_profiles {
-            if !profile_roots.insert(&profile.root) {
-                return Err(fail("duplicate profile root"));
-            }
-            absolute(&profile.root)?;
-            relative(&profile.config_vdf)?;
-            relative(&profile.userdata_directory)?;
-            for p in &profile.libraryfolders_vdf {
-                relative(p)?;
-            }
-            for p in &profile.container_userdata_paths {
-                absolute(p)?;
-            }
-        }
+        self.validate_libraries()?;
+        self.validate_profiles()?;
         absolute(&self.wolf_config.root)?;
         relative(&self.wolf_config.relative_path)?;
         if self.wolf_config.uid != 0 || self.wolf_config.gid != 0 {
@@ -204,6 +176,10 @@ impl RootPolicy {
         if self.backup_root == self.state_root || self.steam_runner.is_empty() {
             return Err(fail("missing runner or overlapping stores"));
         }
+        self.validate_proton()?;
+        Ok(())
+    }
+    fn validate_proton(&self) -> io::Result<()> {
         if let Some(proton) = &self.proton {
             if !identifier(&proton.name, 128) || proton.container_paths.is_empty() {
                 return Err(fail("invalid Proton grant"));
@@ -211,6 +187,42 @@ impl RootPolicy {
             absolute(&proton.host_path)?;
             for path in &proton.container_paths {
                 absolute(path)?;
+            }
+        }
+        Ok(())
+    }
+    fn validate_libraries(&self) -> io::Result<()> {
+        let mut ids = BTreeSet::new();
+        let mut paths = BTreeSet::new();
+        for library in &self.libraries {
+            if !identifier(&library.library_id, 64)
+                || !ids.insert(&library.library_id)
+                || !paths.insert(&library.steamapps_path)
+                || library.container_paths.is_empty()
+            {
+                return Err(fail("duplicate or invalid library grant"));
+            }
+            absolute(&library.steamapps_path)?;
+            for path in &library.container_paths {
+                absolute(path)?;
+            }
+        }
+        Ok(())
+    }
+    fn validate_profiles(&self) -> io::Result<()> {
+        let mut profile_roots = BTreeSet::new();
+        for profile in &self.steam_profiles {
+            if !profile_roots.insert(&profile.root) {
+                return Err(fail("duplicate profile root"));
+            }
+            absolute(&profile.root)?;
+            relative(&profile.config_vdf)?;
+            relative(&profile.userdata_directory)?;
+            for p in &profile.libraryfolders_vdf {
+                relative(p)?;
+            }
+            for p in &profile.container_userdata_paths {
+                absolute(p)?;
             }
         }
         Ok(())

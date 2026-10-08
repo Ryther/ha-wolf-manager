@@ -187,44 +187,63 @@ fn publish(
     published.retain(|pc, _| registered.iter().any(|p| p.pc_id == *pc));
     for entry in entries {
         let pc = entry.registration.pc_id;
-        if let Some(o) = entry.observation {
-            match o.status {
-                Some(status)
-                    if matches!(o.availability, Availability::Online)
-                        && now().saturating_sub(o.observed_at) < 60_000 =>
-                {
-                    if published.get(&pc) != Some(&o.observed_at) {
-                        mqtt.observe_service(&pc, &status, o.observed_at, None)?;
-                        published.insert(pc.clone(), o.observed_at);
-                    }
-                }
-                _ => {
-                    mqtt.unavailable(&pc)?;
-                    published.remove(&pc);
-                }
-            }
-        }
-        for op in entry.operations {
-            if results.get(&op.operation_id) == Some(&op.state) {
-                continue;
-            }
-            if matches!(op.state, OperationState::Queued | OperationState::Running) {
-                continue;
-            }
-            let code = op
-                .sanitized_result
-                .as_ref()
-                .and_then(|v| v.get("code"))
-                .and_then(serde_json::Value::as_str);
-            mqtt.operation_result(&pc, op.operation_id, op.state, code, now())?;
-            results.insert(op.operation_id, op.state);
-        }
+        publish_observation(mqtt, &pc, entry.observation, published)?;
+        publish_results(mqtt, &pc, entry.operations, results)?;
     }
     if results.len() > 10_000 {
         results.clear();
     }
     Ok(())
 }
+fn publish_observation(
+    mqtt: &mut ManagerMqtt,
+    pc: &PcId,
+    observation: Option<crate::api::Observation>,
+    published: &mut BTreeMap<PcId, i64>,
+) -> Result<(), SafeError> {
+    if let Some(o) = observation {
+        match o.status {
+            Some(status)
+                if matches!(o.availability, Availability::Online)
+                    && now().saturating_sub(o.observed_at) < 60_000 =>
+            {
+                if published.get(pc) != Some(&o.observed_at) {
+                    mqtt.observe_service(pc, &status, o.observed_at, None)?;
+                    published.insert(pc.clone(), o.observed_at);
+                }
+            }
+            _ => {
+                mqtt.unavailable(pc)?;
+                published.remove(pc);
+            }
+        }
+    }
+    Ok(())
+}
+fn publish_results(
+    mqtt: &mut ManagerMqtt,
+    pc: &PcId,
+    operations: Vec<crate::history::Operation>,
+    results: &mut BTreeMap<uuid::Uuid, OperationState>,
+) -> Result<(), SafeError> {
+    for op in operations {
+        if results.get(&op.operation_id) == Some(&op.state) {
+            continue;
+        }
+        if matches!(op.state, OperationState::Queued | OperationState::Running) {
+            continue;
+        }
+        let code = op
+            .sanitized_result
+            .as_ref()
+            .and_then(|v| v.get("code"))
+            .and_then(serde_json::Value::as_str);
+        mqtt.operation_result(pc, op.operation_id, op.state, code, now())?;
+        results.insert(op.operation_id, op.state);
+    }
+    Ok(())
+}
+
 pub async fn run(state: AppState, cli: Cli, mut stop: tokio::sync::watch::Receiver<bool>) {
     let mut results = BTreeMap::new();
     loop {

@@ -319,31 +319,7 @@ async fn handle(state: AppState, request: Request<Body>) -> Result<Response, Api
         return Err(SafeError::new("host_unavailable").into());
     }
     let (parts, body) = request.into_parts();
-    if parts
-        .headers
-        .iter()
-        .map(|(k, v)| k.as_str().len() + v.len())
-        .sum::<usize>()
-        > 16 * 1024
-    {
-        return Err(SafeError::new("payload_too_large").into());
-    }
-    if parts.method == Method::OPTIONS {
-        return Err(SafeError::new("forbidden").into());
-    }
-    for name in [
-        "origin",
-        "x-wolf-csrf",
-        "cookie",
-        "authorization",
-        "content-type",
-        "x-wolf-origin",
-        "x-ingress-path",
-    ] {
-        if parts.headers.get_all(name).iter().count() > 1 {
-            return Err(SafeError::new("bad_request").into());
-        }
-    }
+    validate_request_headers(&parts)?;
     let path = parts.uri.path().strip_prefix("/api/v1/");
     if path.is_none() {
         if parts.method != Method::GET {
@@ -366,99 +342,10 @@ async fn handle(state: AppState, request: Request<Body>) -> Result<Response, Api
     let session = session(&headers);
     let mode = state.mode.clone();
     let method = parts.method;
-    if matches!(path, "system/health" | "system/ready" | "system/version") && method == Method::GET
+    if let Some(response) =
+        authentication_route(&state, &method, path, &headers, &bytes, &q, peer).await?
     {
-        let ready = state.ready().await?;
-        let administrator_ready = state.administrator_ready().await?;
-        return Ok((if path=="system/ready"&&!ready{StatusCode::SERVICE_UNAVAILABLE}else{StatusCode::OK},Json(json!({"state":if ready{"ready"}else{"unready"},"version":env!("CARGO_PKG_VERSION"),"protocol":1,"mqtt_enabled":state.mqtt_required.load(std::sync::atomic::Ordering::Acquire),"administrator_ready":administrator_ready,"bootstrap_required":administrator_ready==Some(false)}))).into_response());
-    }
-    if path == "bootstrap/status" && method == Method::GET {
-        return Ok(value(
-            state
-                .blocking(move |s| Ok(json!({"initialized":auth(s,&mode)?.initialized()?})))
-                .await?,
-        ));
-    }
-    if path == "auth/login-challenge" && method == Method::GET {
-        let purpose = match q.get("purpose").map(String::as_str) {
-            Some("login") => Purpose::Login,
-            Some("bootstrap") => Purpose::Bootstrap,
-            _ => return Err(SafeError::new("bad_request").into()),
-        };
-        let c = state
-            .blocking(move |s| auth(s, &mode)?.issue_challenge(peer, purpose, now()))
-            .await?;
-        return Ok(value(
-            json!({"challenge":c.token,"expires_at":c.expires_at}),
-        ));
-    }
-    if matches!(path, "bootstrap" | "auth/login") && method == Method::POST {
-        #[derive(serde::Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Input {
-            password: String,
-            challenge: String,
-        }
-        let input: Input = json_body(&headers, &bytes)?;
-        let bearer = header(&headers, "authorization");
-        let bootstrap = path == "bootstrap";
-        let credentials = state
-            .blocking(move |s| {
-                let mut auth = auth(s, &mode)?;
-                let attempt = LoginAttempt {
-                    peer,
-                    origin: &origin,
-                    challenge: &input.challenge,
-                    csrf_header: &csrf,
-                    password: &input.password,
-                };
-                if bootstrap {
-                    auth.bootstrap(attempt, bearer.strip_prefix("Bearer ").unwrap_or(""), now())
-                } else {
-                    auth.login(attempt, now())
-                }
-            })
-            .await?;
-        let mut response = (
-            if bootstrap {
-                StatusCode::CREATED
-            } else {
-                StatusCode::OK
-            },
-            Json(json!({"csrf_token":credentials.csrf_token,"expires_at":credentials.expires_at})),
-        )
-            .into_response();
-        response.headers_mut().insert(
-            "set-cookie",
-            credentials
-                .cookie()
-                .parse()
-                .map_err(|_| SafeError::new("internal_error"))?,
-        );
         return Ok(response);
-    }
-    if path == "auth/csrf" && method == Method::GET {
-        let wolf_origin = header(&headers, "x-wolf-origin");
-        let c = state
-            .blocking(move |s| {
-                let mut auth = auth(s, &mode)?;
-                match mode {
-                    Deployment::Ingress => auth.issue_ingress_csrf(peer, &wolf_origin, now()),
-                    _ => auth.issue_session_csrf(&session, now()),
-                }
-            })
-            .await?;
-        return Ok(value(
-            json!({"csrf_token":c.token,"expires_at":c.expires_at}),
-        ));
-    }
-    if path == "auth/session" && method == Method::GET {
-        let info = state
-            .blocking(move |s| auth(s, &mode)?.authenticate(&session, now()))
-            .await?;
-        return Ok(value(
-            json!({"authenticated":true,"expires_at":info.expires_at}),
-        ));
     }
     let mutation = !matches!(method, Method::GET | Method::HEAD);
     let auth_session = session.clone();
@@ -466,21 +353,15 @@ async fn handle(state: AppState, request: Request<Body>) -> Result<Response, Api
     let auth_csrf = csrf.clone();
     state
         .blocking(move |s| {
-            let mut auth = auth(s, &mode)?;
-            match mode {
-                Deployment::Ingress => {
-                    if mutation {
-                        auth.require_ingress_mutation(peer, &auth_csrf, &auth_origin, now())?;
-                    }
-                }
-                _ => {
-                    if mutation {
-                        auth.require_mutation(&auth_session, &auth_csrf, &auth_origin, now())?;
-                    } else {
-                        auth.authenticate(&auth_session, now())?;
-                    }
-                }
-            }
+            authorize(
+                s,
+                &mode,
+                peer,
+                &auth_session,
+                &auth_csrf,
+                &auth_origin,
+                mutation,
+            )?;
             Ok(())
         })
         .await?;
@@ -527,6 +408,200 @@ async fn handle(state: AppState, request: Request<Body>) -> Result<Response, Api
     }
     crate::routes::product(state, &method, path, &headers, &bytes, q).await
 }
+fn validate_request_headers(parts: &axum::http::request::Parts) -> Result<(), ApiError> {
+    if parts
+        .headers
+        .iter()
+        .map(|(k, v)| k.as_str().len() + v.len())
+        .sum::<usize>()
+        > 16 * 1024
+    {
+        return Err(SafeError::new("payload_too_large").into());
+    }
+    if parts.method == Method::OPTIONS {
+        return Err(SafeError::new("forbidden").into());
+    }
+    for name in [
+        "origin",
+        "x-wolf-csrf",
+        "cookie",
+        "authorization",
+        "content-type",
+        "x-wolf-origin",
+        "x-ingress-path",
+    ] {
+        if parts.headers.get_all(name).iter().count() > 1 {
+            return Err(SafeError::new("bad_request").into());
+        }
+    }
+
+    Ok(())
+}
+
+async fn authentication_route(
+    state: &AppState,
+    method: &Method,
+    path: &str,
+    headers: &HeaderMap,
+    bytes: &[u8],
+    q: &std::collections::BTreeMap<String, String>,
+    peer: std::net::IpAddr,
+) -> Result<Option<Response>, ApiError> {
+    let session = session(headers);
+    let mode = state.mode.clone();
+    if matches!(path, "system/health" | "system/ready" | "system/version") && *method == Method::GET
+    {
+        return health_response(state, path).await.map(Some);
+    }
+    if path == "bootstrap/status" && *method == Method::GET {
+        return Ok(Some(value(
+            state
+                .blocking(move |s| Ok(json!({"initialized":auth(s,&mode)?.initialized()?})))
+                .await?,
+        )));
+    }
+    if path == "auth/login-challenge" && *method == Method::GET {
+        return challenge_response(state, q, peer).await.map(Some);
+    }
+    if matches!(path, "bootstrap" | "auth/login") && *method == Method::POST {
+        return login_response(state, path, headers, bytes, peer)
+            .await
+            .map(Some);
+    }
+    if path == "auth/csrf" && *method == Method::GET {
+        let wolf_origin = header(headers, "x-wolf-origin");
+        let c = state
+            .blocking(move |s| {
+                let mut auth = auth(s, &mode)?;
+                match mode {
+                    Deployment::Ingress => auth.issue_ingress_csrf(peer, &wolf_origin, now()),
+                    _ => auth.issue_session_csrf(&session, now()),
+                }
+            })
+            .await?;
+        return Ok(Some(value(
+            json!({"csrf_token":c.token,"expires_at":c.expires_at}),
+        )));
+    }
+    if path == "auth/session" && *method == Method::GET {
+        let info = state
+            .blocking(move |s| auth(s, &mode)?.authenticate(&session, now()))
+            .await?;
+        return Ok(Some(value(
+            json!({"authenticated":true,"expires_at":info.expires_at}),
+        )));
+    }
+
+    Ok(None)
+}
+
+async fn challenge_response(
+    state: &AppState,
+    q: &std::collections::BTreeMap<String, String>,
+    peer: std::net::IpAddr,
+) -> Result<Response, ApiError> {
+    let mode = state.mode.clone();
+    let purpose = match q.get("purpose").map(String::as_str) {
+        Some("login") => Purpose::Login,
+        Some("bootstrap") => Purpose::Bootstrap,
+        _ => return Err(SafeError::new("bad_request").into()),
+    };
+    let c = state
+        .blocking(move |s| auth(s, &mode)?.issue_challenge(peer, purpose, now()))
+        .await?;
+    Ok(value(
+        json!({"challenge":c.token,"expires_at":c.expires_at}),
+    ))
+}
+
+async fn health_response(state: &AppState, path: &str) -> Result<Response, ApiError> {
+    let ready = state.ready().await?;
+    let administrator_ready = state.administrator_ready().await?;
+    Ok((if path=="system/ready"&&!ready{StatusCode::SERVICE_UNAVAILABLE}else{StatusCode::OK},Json(json!({"state":if ready{"ready"}else{"unready"},"version":env!("CARGO_PKG_VERSION"),"protocol":1,"mqtt_enabled":state.mqtt_required.load(std::sync::atomic::Ordering::Acquire),"administrator_ready":administrator_ready,"bootstrap_required":administrator_ready==Some(false)}))).into_response())
+}
+
+async fn login_response(
+    state: &AppState,
+    path: &str,
+    headers: &HeaderMap,
+    bytes: &[u8],
+    peer: std::net::IpAddr,
+) -> Result<Response, ApiError> {
+    let origin = header(headers, "origin");
+    let csrf = header(headers, "x-wolf-csrf");
+    let mode = state.mode.clone();
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Input {
+        password: String,
+        challenge: String,
+    }
+    let input: Input = json_body(headers, bytes)?;
+    let bearer = header(headers, "authorization");
+    let bootstrap = path == "bootstrap";
+    let credentials = state
+        .blocking(move |s| {
+            let mut auth = auth(s, &mode)?;
+            let attempt = LoginAttempt {
+                peer,
+                origin: &origin,
+                challenge: &input.challenge,
+                csrf_header: &csrf,
+                password: &input.password,
+            };
+            if bootstrap {
+                auth.bootstrap(attempt, bearer.strip_prefix("Bearer ").unwrap_or(""), now())
+            } else {
+                auth.login(attempt, now())
+            }
+        })
+        .await?;
+    let mut response = (
+        if bootstrap {
+            StatusCode::CREATED
+        } else {
+            StatusCode::OK
+        },
+        Json(json!({"csrf_token":credentials.csrf_token,"expires_at":credentials.expires_at})),
+    )
+        .into_response();
+    response.headers_mut().insert(
+        "set-cookie",
+        credentials
+            .cookie()
+            .parse()
+            .map_err(|_| SafeError::new("internal_error"))?,
+    );
+    Ok(response)
+}
+
+fn authorize(
+    store: &mut Store,
+    mode: &Deployment,
+    peer: std::net::IpAddr,
+    session: &str,
+    csrf: &str,
+    origin: &str,
+    mutation: bool,
+) -> Result<(), SafeError> {
+    let mut auth = auth(store, mode)?;
+    match mode {
+        Deployment::Ingress => {
+            if mutation {
+                auth.require_ingress_mutation(peer, csrf, origin, now())?;
+            }
+        }
+        _ => {
+            if mutation {
+                auth.require_mutation(session, csrf, origin, now())?;
+            } else {
+                auth.authenticate(session, now())?;
+            }
+        }
+    }
+    Ok(())
+}
+
 fn escape(value: &str) -> String {
     value
         .replace('&', "&amp;")

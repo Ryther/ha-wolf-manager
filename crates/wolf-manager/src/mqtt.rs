@@ -829,23 +829,7 @@ impl ManagerMqtt {
         let pcs: Vec<_> = self.pcs.keys().cloned().collect();
         for pc in pcs {
             if topic == self.topics.service_command(&pc) {
-                if !self.controls_ready {
-                    return Ok(None);
-                }
-                let command = match validate_command(&publish.payload, publish.retain) {
-                    Ok(c) => c,
-                    Err(error) => {
-                        let now = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map_err(internal)?
-                            .as_millis()
-                            .try_into()
-                            .map_err(internal)?;
-                        self.command_refused(&pc, error.code().as_str(), now)?;
-                        return Ok(None);
-                    }
-                };
-                return Ok(Some(ManagerEvent::Command { pc_id: pc, command }));
+                return self.receive_command(pc, &publish);
             }
             if topic == self.topics.host_availability(&pc) {
                 return match publish.payload.as_ref() {
@@ -867,21 +851,7 @@ impl ManagerMqtt {
                 .try_into()
                 .unwrap_or(u64::MAX);
             if topic == self.topics.catalog_manifest(&pc) {
-                if publish.payload.len() > 2 * 1024 * 1024 {
-                    return Err(SafeError::new("payload_too_large"));
-                }
-                let manifest: CatalogManifest = serde_json::from_slice(&publish.payload)
-                    .map_err(|_| SafeError::validation())?;
-                if manifest.pc_id != pc {
-                    return Err(SafeError::validation());
-                }
-                return Ok(self
-                    .catalog
-                    .manifest(manifest, now)?
-                    .map(|(manifest, attributes)| ManagerEvent::CatalogReady {
-                        manifest,
-                        attributes,
-                    }));
+                return self.receive_manifest(pc, &publish, now);
             }
             let base = self
                 .topics
@@ -891,32 +861,84 @@ impl ManagerMqtt {
                 .strip_prefix(prefix)
                 .and_then(|rest| rest.strip_suffix("/attributes"))
             {
-                let app = AppId::new(id)?;
-                if publish.payload.is_empty() {
-                    return Ok(None);
-                }
-                if publish.payload.len() > 16384 {
-                    return Err(SafeError::new("payload_too_large"));
-                }
-                let attr: CatalogAttributes = serde_json::from_slice(&publish.payload)
-                    .map_err(|_| SafeError::validation())?;
-                if attr.pc_id != pc || attr.app_id != app {
-                    return Err(SafeError::validation());
-                }
-                return Ok(self
-                    .catalog
-                    .attributes(attr, now)?
-                    .map(|(manifest, attributes)| ManagerEvent::CatalogReady {
-                        manifest,
-                        attributes,
-                    }));
+                return self.receive_attributes(pc, id, &publish, now);
             }
         }
         Ok(None)
     }
-    /// Keep this future polled while draining events. Queueing never awaits behind poll.
-    /// On error, stop controls and rebuild from durable state; never replay commands.
-    pub async fn poll(&mut self) -> Result<Option<ManagerEvent>, SafeError> {
+    fn receive_manifest(
+        &mut self,
+        pc: PcId,
+        publish: &Publish,
+        now: u64,
+    ) -> Result<Option<ManagerEvent>, SafeError> {
+        if publish.payload.len() > 2 * 1024 * 1024 {
+            return Err(SafeError::new("payload_too_large"));
+        }
+        let manifest: CatalogManifest =
+            serde_json::from_slice(&publish.payload).map_err(|_| SafeError::validation())?;
+        if manifest.pc_id != pc {
+            return Err(SafeError::validation());
+        }
+        Ok(self
+            .catalog
+            .manifest(manifest, now)?
+            .map(|(manifest, attributes)| ManagerEvent::CatalogReady {
+                manifest,
+                attributes,
+            }))
+    }
+    fn receive_attributes(
+        &mut self,
+        pc: PcId,
+        id: &str,
+        publish: &Publish,
+        now: u64,
+    ) -> Result<Option<ManagerEvent>, SafeError> {
+        let app = AppId::new(id)?;
+        if publish.payload.is_empty() {
+            return Ok(None);
+        }
+        if publish.payload.len() > 16384 {
+            return Err(SafeError::new("payload_too_large"));
+        }
+        let attr: CatalogAttributes =
+            serde_json::from_slice(&publish.payload).map_err(|_| SafeError::validation())?;
+        if attr.pc_id != pc || attr.app_id != app {
+            return Err(SafeError::validation());
+        }
+        Ok(self
+            .catalog
+            .attributes(attr, now)?
+            .map(|(manifest, attributes)| ManagerEvent::CatalogReady {
+                manifest,
+                attributes,
+            }))
+    }
+    fn receive_command(
+        &mut self,
+        pc: PcId,
+        publish: &Publish,
+    ) -> Result<Option<ManagerEvent>, SafeError> {
+        if !self.controls_ready {
+            return Ok(None);
+        }
+        let command = match validate_command(&publish.payload, publish.retain) {
+            Ok(c) => c,
+            Err(error) => {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_err(internal)?
+                    .as_millis()
+                    .try_into()
+                    .map_err(internal)?;
+                self.command_refused(&pc, error.code().as_str(), now)?;
+                return Ok(None);
+            }
+        };
+        Ok(Some(ManagerEvent::Command { pc_id: pc, command }))
+    }
+    fn refresh_expiry(&mut self) -> Result<(), SafeError> {
         let expired = self.catalog.expire_with_replay(
             self.started
                 .elapsed()
@@ -954,6 +976,75 @@ impl ManagerMqtt {
         for pc in stale {
             self.unavailable(&pc)?;
         }
+
+        Ok(())
+    }
+    fn receive_connection_ack(
+        &mut self,
+        ack: rumqttc::v5::mqttbytes::v5::ConnAck,
+    ) -> Result<Option<ManagerEvent>, SafeError> {
+        if self.closing {
+            return Err(SafeError::new("internal_error"));
+        }
+        self.connected = true;
+        self.controls_ready = false;
+        self.pending_subscriptions.clear();
+        self.subscription_plan.clear();
+        if ack.code != ConnectReturnCode::Success
+            || ack.session_present
+            || ack.properties.as_ref().is_some_and(|p| {
+                p.session_expiry_interval.is_some_and(|expiry| expiry != 0)
+                    || p.max_qos.is_some_and(|q| q < 1)
+                    || p.retain_available == Some(0)
+            })
+        {
+            return Err(SafeError::new("forbidden"));
+        }
+        tracing::info!(
+            code = "mqtt_connected",
+            count = self.pcs.len(),
+            "Fresh MQTT session connected; awaiting control subscriptions"
+        );
+        self.outbox.clear();
+        self.control_outbox.clear();
+        self.outbox_bytes = 0;
+        for observation in self.observations.values_mut() {
+            observation.available = false;
+        }
+        let filters = self.filters();
+        self.control_outbox
+            .push_back(ControlRequest::Subscribe(filters, true));
+        self.replay(true)?;
+        Ok(None)
+    }
+    fn receive_subscription_ack(
+        &mut self,
+        ack: rumqttc::v5::mqttbytes::v5::SubAck,
+    ) -> Result<Option<ManagerEvent>, SafeError> {
+        let (qos, controls) = self
+            .pending_subscriptions
+            .remove(&ack.pkid)
+            .ok_or_else(|| SafeError::new("forbidden"))?;
+        if ack.return_codes.len()!=qos.len()||ack.return_codes.iter().zip(&qos).any(|(actual,expected)|!matches!(actual,SubscribeReasonCode::Success(qos) if qos==expected)){return Err(SafeError::new("forbidden"));}
+        if controls {
+            let was_ready = self.controls_ready;
+            self.controls_ready = !self.closing;
+            if self.controls_ready && !was_ready {
+                tracing::info!(
+                    code = "mqtt_controls_ready",
+                    count = self.pcs.len(),
+                    "MQTT control subscription acknowledged"
+                );
+            }
+            Ok(Some(ManagerEvent::Connected))
+        } else {
+            Ok(None)
+        }
+    }
+    /// Keep this future polled while draining events. Queueing never awaits behind poll.
+    /// On error, stop controls and rebuild from durable state; never replay commands.
+    pub async fn poll(&mut self) -> Result<Option<ManagerEvent>, SafeError> {
+        self.refresh_expiry()?;
         self.drain_outbox();
         let event = match self.eventloop.poll().await {
             Ok(e) => e,
@@ -971,41 +1062,7 @@ impl ManagerMqtt {
             }
         };
         match event {
-            Event::Incoming(Packet::ConnAck(ack)) => {
-                if self.closing {
-                    return Err(SafeError::new("internal_error"));
-                }
-                self.connected = true;
-                self.controls_ready = false;
-                self.pending_subscriptions.clear();
-                self.subscription_plan.clear();
-                if ack.code != ConnectReturnCode::Success
-                    || ack.session_present
-                    || ack.properties.as_ref().is_some_and(|p| {
-                        p.session_expiry_interval.is_some_and(|expiry| expiry != 0)
-                            || p.max_qos.is_some_and(|q| q < 1)
-                            || p.retain_available == Some(0)
-                    })
-                {
-                    return Err(SafeError::new("forbidden"));
-                }
-                tracing::info!(
-                    code = "mqtt_connected",
-                    count = self.pcs.len(),
-                    "Fresh MQTT session connected; awaiting control subscriptions"
-                );
-                self.outbox.clear();
-                self.control_outbox.clear();
-                self.outbox_bytes = 0;
-                for observation in self.observations.values_mut() {
-                    observation.available = false;
-                }
-                let filters = self.filters();
-                self.control_outbox
-                    .push_back(ControlRequest::Subscribe(filters, true));
-                self.replay(true)?;
-                Ok(None)
-            }
+            Event::Incoming(Packet::ConnAck(ack)) => self.receive_connection_ack(ack),
             Event::Outgoing(rumqttc::Outgoing::Subscribe(pkid)) => {
                 let plan = self
                     .subscription_plan
@@ -1014,27 +1071,7 @@ impl ManagerMqtt {
                 self.pending_subscriptions.insert(pkid, plan);
                 Ok(None)
             }
-            Event::Incoming(Packet::SubAck(ack)) => {
-                let (qos, controls) = self
-                    .pending_subscriptions
-                    .remove(&ack.pkid)
-                    .ok_or_else(|| SafeError::new("forbidden"))?;
-                if ack.return_codes.len()!=qos.len()||ack.return_codes.iter().zip(&qos).any(|(actual,expected)|!matches!(actual,SubscribeReasonCode::Success(qos) if qos==expected)){return Err(SafeError::new("forbidden"));}
-                if controls {
-                    let was_ready = self.controls_ready;
-                    self.controls_ready = !self.closing;
-                    if self.controls_ready && !was_ready {
-                        tracing::info!(
-                            code = "mqtt_controls_ready",
-                            count = self.pcs.len(),
-                            "MQTT control subscription acknowledged"
-                        );
-                    }
-                    Ok(Some(ManagerEvent::Connected))
-                } else {
-                    Ok(None)
-                }
-            }
+            Event::Incoming(Packet::SubAck(ack)) => self.receive_subscription_ack(ack),
             Event::Incoming(Packet::Publish(publish)) => {
                 let result = match self.publication(publish) {
                     Ok(result) => result,

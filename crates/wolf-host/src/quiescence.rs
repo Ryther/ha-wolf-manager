@@ -54,41 +54,53 @@ pub fn require_stopped(uid: u32, executables: &[PathBuf]) -> io::Result<()> {
             continue;
         }
         let directory = entry.path();
-        let owner = match fs::metadata(&directory) {
-            Ok(metadata) => metadata,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
-            Err(e) => return Err(e),
-        };
-        if owner.uid() != uid {
-            continue;
-        }
-        let executable = match fs::metadata(directory.join("exe")) {
-            Ok(metadata) => metadata,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                match fs::read_to_string(directory.join("status")) {
-                    Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
-                    Ok(status) if status.lines().any(|line| line.starts_with("State:\tZ")) => {
-                        continue;
-                    }
-                    _ => return Err(unsafe_state()),
-                }
+        require_process_stopped(&directory, uid, &identities)?;
+    }
+    Ok(())
+}
+
+fn executable_metadata(directory: &Path) -> io::Result<Option<fs::Metadata>> {
+    match fs::metadata(directory.join("exe")) {
+        Ok(metadata) => Ok(Some(metadata)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            match fs::read_to_string(directory.join("status")) {
+                Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+                Ok(status) if status.lines().any(|line| line.starts_with("State:\tZ")) => Ok(None),
+                _ => Err(unsafe_state()),
             }
-            Err(_) => return Err(unsafe_state()),
-        };
-        let name = match process_name(&directory) {
-            Ok(name) => name,
-            Err(_) if process_exited(&directory) => continue,
-            Err(_) => return Err(unsafe_state()),
-        };
-        // A configured launcher may not share native Steam's inode. Refuse known
-        // Steam process names even when that native executable was not declared.
-        if name
-            .get(..5)
-            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"steam"))
-            || identities.contains(&(executable.dev(), executable.ino()))
-        {
-            return Err(io::Error::other("Steam writer is running"));
         }
+        Err(_) => Err(unsafe_state()),
+    }
+}
+fn require_process_stopped(
+    directory: &Path,
+    uid: u32,
+    identities: &BTreeSet<(u64, u64)>,
+) -> io::Result<()> {
+    let owner = match fs::metadata(directory) {
+        Ok(metadata) => metadata,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    if owner.uid() != uid {
+        return Ok(());
+    }
+    let Some(executable) = executable_metadata(directory)? else {
+        return Ok(());
+    };
+    let name = match process_name(directory) {
+        Ok(name) => name,
+        Err(_) if process_exited(directory) => return Ok(()),
+        Err(_) => return Err(unsafe_state()),
+    };
+    // A configured launcher may not share native Steam's inode. Refuse known
+    // Steam process names even when that native executable was not declared.
+    if name
+        .get(..5)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"steam"))
+        || identities.contains(&(executable.dev(), executable.ino()))
+    {
+        return Err(io::Error::other("Steam writer is running"));
     }
     Ok(())
 }

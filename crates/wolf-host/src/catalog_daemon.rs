@@ -81,13 +81,21 @@ fn directory(path: &Path, uid: u32, private: bool) -> io::Result<File> {
             return Err(invalid());
         }
         if ancestor == path {
-            if private && (m.uid() != uid || m.mode() & 0o7777 != 0o700) {
-                return Err(invalid());
-            }
+            require_directory_privacy(&m, uid, private)?;
             return Ok(file);
         }
     }
     Err(invalid())
+}
+fn require_directory_privacy(
+    metadata: &std::fs::Metadata,
+    uid: u32,
+    private: bool,
+) -> io::Result<()> {
+    if private && (metadata.uid() != uid || metadata.mode() & 0o7777 != 0o700) {
+        return Err(invalid());
+    }
+    Ok(())
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]

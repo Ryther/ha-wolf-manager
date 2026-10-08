@@ -56,17 +56,24 @@ fn apply_inner(
             Ok(id) => applied.push((overlay.grant, id)),
             Err(error) => {
                 // Restore only verified known postimages; any conflict retains evidence and data.
-                for (grant, id) in applied.into_iter().rev() {
-                    if quiescent().is_err() {
-                        break;
-                    }
-                    let _ = store.restore(grant, &id);
-                }
+                restore_applied(store, applied, &quiescent);
                 return Err(error);
             }
         }
     }
     Ok(())
+}
+fn restore_applied(
+    store: &TransactionStore,
+    applied: Vec<(&Grant, uuid::Uuid)>,
+    quiescent: &impl Fn() -> io::Result<()>,
+) {
+    for (grant, id) in applied.into_iter().rev() {
+        if quiescent().is_err() {
+            break;
+        }
+        let _ = store.restore(grant, &id);
+    }
 }
 pub fn restore(
     store: &TransactionStore,

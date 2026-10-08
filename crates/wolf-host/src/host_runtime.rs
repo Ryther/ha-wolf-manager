@@ -435,47 +435,55 @@ pub fn require_no_container_writers(
             .and_then(serde_json::Value::as_array)
             .ok_or_else(|| io::Error::other("container mount authority is unavailable"))?;
         for mount in mounts {
-            let rw = mount
-                .get("RW")
-                .and_then(serde_json::Value::as_bool)
-                .ok_or_else(|| io::Error::other("container mount writer permission is unknown"))?;
-            if !rw {
-                continue;
-            }
-            let source = mount
-                .get("Source")
-                .and_then(serde_json::Value::as_str)
-                .ok_or_else(|| io::Error::other("container mount source is unknown"))?;
-            let path = std::path::Path::new(source);
-            if !path.is_absolute()
-                || path.components().any(|component| {
-                    matches!(
-                        component,
-                        std::path::Component::ParentDir | std::path::Component::CurDir
-                    )
-                })
-            {
-                return Err(io::Error::other("container source identity is invalid"));
-            }
-            // Canonicalization is read-only observation, never a mutable grant or write path.
-            if roots
-                .iter()
-                .any(|root| path.starts_with(root) || root.starts_with(path))
-            {
-                return Err(io::Error::other(
-                    "unproven Steam container writer remains active",
-                ));
-            }
-            let canonical = path.canonicalize()?;
-            if roots
-                .iter()
-                .any(|root| canonical.starts_with(root) || root.starts_with(&canonical))
-            {
-                return Err(io::Error::other(
-                    "aliased Steam container writer remains active",
-                ));
-            }
+            require_mount_nonwriter(mount, &roots)?;
         }
+    }
+    Ok(())
+}
+
+fn require_mount_nonwriter(
+    mount: &serde_json::Value,
+    roots: &[&std::path::Path],
+) -> io::Result<()> {
+    let rw = mount
+        .get("RW")
+        .and_then(serde_json::Value::as_bool)
+        .ok_or_else(|| io::Error::other("container mount writer permission is unknown"))?;
+    if !rw {
+        return Ok(());
+    }
+    let source = mount
+        .get("Source")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| io::Error::other("container mount source is unknown"))?;
+    let path = std::path::Path::new(source);
+    if !path.is_absolute()
+        || path.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir | std::path::Component::CurDir
+            )
+        })
+    {
+        return Err(io::Error::other("container source identity is invalid"));
+    }
+    // Canonicalization is read-only observation, never a mutable grant or write path.
+    if roots
+        .iter()
+        .any(|root| path.starts_with(root) || root.starts_with(path))
+    {
+        return Err(io::Error::other(
+            "unproven Steam container writer remains active",
+        ));
+    }
+    let canonical = path.canonicalize()?;
+    if roots
+        .iter()
+        .any(|root| canonical.starts_with(root) || root.starts_with(&canonical))
+    {
+        return Err(io::Error::other(
+            "aliased Steam container writer remains active",
+        ));
     }
     Ok(())
 }

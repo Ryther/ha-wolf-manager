@@ -171,43 +171,7 @@ pub fn scan(config: &CatalogConfig, observed_at_ms: i64) -> io::Result<Snapshot>
     }
     lock.lock_exclusive()?;
     let mut found = inventory(config, observed_at_ms)?;
-    let generation = match private_read(&config.state_directory.join("generation"))? {
-        Some(s) => {
-            let reserved = s.trim().parse::<u64>().map_err(|_| invalid())?;
-            for checkpoint in ["accepted.json", "published.json"] {
-                if let Some(text) = private_read(&config.state_directory.join(checkpoint))? {
-                    let old: Snapshot = serde_json::from_str(&text)?;
-                    wolf_core::validate_catalog_generation(
-                        &config.pc_id,
-                        &old.manifest,
-                        &old.attributes,
-                        None,
-                    )
-                    .map_err(|_| invalid())?;
-                    if old.manifest.catalog_generation > reserved {
-                        return Err(invalid());
-                    }
-                }
-            }
-            reserved.checked_add(1).ok_or_else(invalid)?
-        }
-        None => {
-            if config
-                .state_directory
-                .join("accepted.json")
-                .symlink_metadata()
-                .is_ok()
-                || config
-                    .state_directory
-                    .join("published.json")
-                    .symlink_metadata()
-                    .is_ok()
-            {
-                return Err(invalid());
-            }
-            1
-        }
-    };
+    let generation = next_generation(config)?;
     for value in found.values_mut() {
         value.catalog_generation = generation
     }
@@ -313,6 +277,48 @@ pub fn record_published(config: &CatalogConfig, snapshot: &Snapshot) -> io::Resu
     )
 }
 
+fn next_generation(config: &CatalogConfig) -> io::Result<u64> {
+    Ok(
+        match private_read(&config.state_directory.join("generation"))? {
+            Some(s) => {
+                let reserved = s.trim().parse::<u64>().map_err(|_| invalid())?;
+                for checkpoint in ["accepted.json", "published.json"] {
+                    if let Some(text) = private_read(&config.state_directory.join(checkpoint))? {
+                        let old: Snapshot = serde_json::from_str(&text)?;
+                        wolf_core::validate_catalog_generation(
+                            &config.pc_id,
+                            &old.manifest,
+                            &old.attributes,
+                            None,
+                        )
+                        .map_err(|_| invalid())?;
+                        if old.manifest.catalog_generation > reserved {
+                            return Err(invalid());
+                        }
+                    }
+                }
+                reserved.checked_add(1).ok_or_else(invalid)?
+            }
+            None => {
+                if config
+                    .state_directory
+                    .join("accepted.json")
+                    .symlink_metadata()
+                    .is_ok()
+                    || config
+                        .state_directory
+                        .join("published.json")
+                        .symlink_metadata()
+                        .is_ok()
+                {
+                    return Err(invalid());
+                }
+                1
+            }
+        },
+    )
+}
+
 /// Read-only inventory for root lifecycle hooks; never advances published generations.
 pub fn inventory(
     config: &CatalogConfig,
@@ -333,76 +339,14 @@ pub fn inventory(
         }
         let dir = root(&library.canonical_path)?;
         let identity = dir.metadata()?;
-        let mut paths = fs::read_dir(&library.canonical_path)?
-            .take(50001)
-            .map(|e| e.map(|e| e.file_name()))
-            .collect::<io::Result<Vec<_>>>()?;
-        if paths.len() > 50000 {
-            return Err(invalid());
-        }
-        paths.sort();
-        for name in paths {
-            let Some(name) = name.to_str() else {
-                return Err(invalid());
-            };
-            if !name.starts_with("appmanifest_") || !name.ends_with(".acf") {
-                continue;
-            }
-            count += 1;
-            if count > 10000 {
-                return Err(invalid());
-            }
-            let text = read_bounded(anchored(&dir, Path::new(name), false)?)?;
-            let doc = crate::vdf::Document::parse(&text)?;
-            let get = |field| doc.get(&["AppState", field]);
-            let id = get("appid")?.ok_or_else(invalid)?;
-            let app = AppId::new(&id).map_err(|_| invalid())?;
-            if name != format!("appmanifest_{id}.acf") {
-                return Err(invalid());
-            }
-            let cleaned = clean_game_name(&get("name")?.ok_or_else(invalid)?);
-            let install = get("installdir")?.ok_or_else(invalid)?;
-            let flags = get("StateFlags")?.unwrap_or_default();
-            if cleaned.is_empty()
-                || [
-                    "proton",
-                    "steam linux runtime",
-                    "steamworks common redistributables",
-                ]
-                .iter()
-                .any(|p| cleaned.to_lowercase().contains(p))
-                || (!flags.is_empty() && flags != "4")
-            {
-                continue;
-            }
-            if install.is_empty()
-                || Path::new(&install)
-                    .components()
-                    .any(|c| !matches!(c, Component::Normal(_)))
-                || Path::new(&install).components().count() != 1
-            {
-                return Err(invalid());
-            }
-            match anchored(&dir, &Path::new("common").join(&install), true) {
-                Ok(_) => {}
-                Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
-                Err(e) => return Err(e),
-            };
-            let attr = CatalogAttributes {
-                version: 1,
-                pc_id: config.pc_id.clone(),
-                app_id: app.clone(),
-                name: cleaned,
-                cover_url: steam_cover_url(&app),
-                library_id: library.library_id.clone(),
-                catalog_generation: 0,
-                observed_at_ms,
-            };
-            attr.validate().map_err(|_| invalid())?;
-            if found.insert(app, attr).is_some() {
-                return Err(invalid());
-            }
-        }
+        scan_library(
+            config,
+            library,
+            &dir,
+            observed_at_ms,
+            &mut count,
+            &mut found,
+        )?;
         let current = fs::symlink_metadata(&library.canonical_path)?;
         if !current.is_dir()
             || current.dev() != identity.dev()
@@ -414,4 +358,101 @@ pub fn inventory(
         }
     }
     Ok(found)
+}
+
+fn scan_library(
+    config: &CatalogConfig,
+    library: &Library,
+    dir: &File,
+    observed_at_ms: i64,
+    count: &mut usize,
+    found: &mut BTreeMap<AppId, CatalogAttributes>,
+) -> io::Result<()> {
+    let mut paths = fs::read_dir(&library.canonical_path)?
+        .take(50001)
+        .map(|e| e.map(|e| e.file_name()))
+        .collect::<io::Result<Vec<_>>>()?;
+    if paths.len() > 50000 {
+        return Err(invalid());
+    }
+    paths.sort();
+    for name in paths {
+        let Some(name) = name.to_str() else {
+            return Err(invalid());
+        };
+        if !name.starts_with("appmanifest_") || !name.ends_with(".acf") {
+            continue;
+        }
+        *count += 1;
+        if *count > 10000 {
+            return Err(invalid());
+        }
+        let Some(attr) =
+            read_game_manifest(config, &library.library_id, dir, name, observed_at_ms)?
+        else {
+            continue;
+        };
+        let app = attr.app_id.clone();
+        if found.insert(app, attr).is_some() {
+            return Err(invalid());
+        }
+    }
+    Ok(())
+}
+
+fn read_game_manifest(
+    config: &CatalogConfig,
+    library_id: &str,
+    dir: &File,
+    name: &str,
+    observed_at_ms: i64,
+) -> io::Result<Option<CatalogAttributes>> {
+    let text = read_bounded(anchored(dir, Path::new(name), false)?)?;
+    let doc = crate::vdf::Document::parse(&text)?;
+    let get = |field| doc.get(&["AppState", field]);
+    let id = get("appid")?.ok_or_else(invalid)?;
+    let app = AppId::new(&id).map_err(|_| invalid())?;
+    if name != format!("appmanifest_{id}.acf") {
+        return Err(invalid());
+    }
+    let cleaned = clean_game_name(&get("name")?.ok_or_else(invalid)?);
+    let install = get("installdir")?.ok_or_else(invalid)?;
+    let flags = get("StateFlags")?.unwrap_or_default();
+    if cleaned.is_empty()
+        || [
+            "proton",
+            "steam linux runtime",
+            "steamworks common redistributables",
+        ]
+        .iter()
+        .any(|p| cleaned.to_lowercase().contains(p))
+        || (!flags.is_empty() && flags != "4")
+    {
+        return Ok(None);
+    }
+    if install.is_empty()
+        || Path::new(&install)
+            .components()
+            .any(|c| !matches!(c, Component::Normal(_)))
+        || Path::new(&install).components().count() != 1
+    {
+        return Err(invalid());
+    }
+    match anchored(dir, &Path::new("common").join(&install), true) {
+        Ok(_) => {}
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let attr = CatalogAttributes {
+        version: 1,
+        pc_id: config.pc_id.clone(),
+        app_id: app.clone(),
+        name: cleaned,
+        cover_url: steam_cover_url(&app),
+        library_id: library_id.to_owned(),
+        catalog_generation: 0,
+        observed_at_ms,
+    };
+    attr.validate().map_err(|_| invalid())?;
+    Ok(Some(attr))
 }

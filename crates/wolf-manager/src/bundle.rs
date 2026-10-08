@@ -89,6 +89,10 @@ fn validate_database(root: &DataRoot) -> Result<(), SafeError> {
     if admin != root.marker_present()? {
         return Err(SafeError::validation());
     }
+    validate_identities(root, &conn)?;
+    Ok(())
+}
+fn validate_identities(root: &DataRoot, conn: &Connection) -> Result<(), SafeError> {
     let mut stmt=conn.prepare("SELECT pc_id,enrolled_public_key,host_key_algorithm,host_key_public,host_key_fingerprint FROM pcs").map_err(internal)?;
     let rows = stmt
         .query_map([], |r| {
@@ -130,6 +134,7 @@ fn validate_database(root: &DataRoot) -> Result<(), SafeError> {
     }
     Ok(())
 }
+
 fn read_limited(file: File, max: u64) -> Result<Vec<u8>, SafeError> {
     if file.metadata().map_err(internal)?.len() > max {
         return Err(SafeError::new("payload_too_large"));
@@ -185,33 +190,38 @@ fn inventory(root: &DataRoot) -> Result<Vec<String>, SafeError> {
     }
     if std::fs::symlink_metadata(root.path("keys")).is_ok() {
         directory(root, "keys")?;
-        for entry in std::fs::read_dir(root.path("keys")).map_err(internal)? {
-            if files.len() > 10002 {
-                return Err(SafeError::new("payload_too_large"));
-            }
-            let entry = entry.map_err(internal)?;
-            let id = PcId::new(entry.file_name().into_string().map_err(internal)?)?;
-            let dir = format!("keys/{}", id.as_str());
-            directory(root, &dir)?;
-            let children = std::fs::read_dir(root.path(&dir))
-                .map_err(internal)?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(internal)?;
-            if children.len() != 1 || children[0].file_name() != "id_ed25519" {
-                return Err(SafeError::validation());
-            }
-            let name = format!("{dir}/id_ed25519");
-            let bytes = read_limited(root.file(&name, false)?, 16384)?;
-            let key = russh::keys::PrivateKey::from_openssh(&bytes).map_err(internal)?;
-            if key.is_encrypted() || key.algorithm() != russh::keys::Algorithm::Ed25519 {
-                return Err(SafeError::validation());
-            }
-            files.push(name);
-        }
+        inventory_keys(root, &mut files)?;
     }
     files.sort();
     Ok(files)
 }
+fn inventory_keys(root: &DataRoot, files: &mut Vec<String>) -> Result<(), SafeError> {
+    for entry in std::fs::read_dir(root.path("keys")).map_err(internal)? {
+        if files.len() > 10002 {
+            return Err(SafeError::new("payload_too_large"));
+        }
+        let entry = entry.map_err(internal)?;
+        let id = PcId::new(entry.file_name().into_string().map_err(internal)?)?;
+        let dir = format!("keys/{}", id.as_str());
+        directory(root, &dir)?;
+        let children = std::fs::read_dir(root.path(&dir))
+            .map_err(internal)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(internal)?;
+        if children.len() != 1 || children[0].file_name() != "id_ed25519" {
+            return Err(SafeError::validation());
+        }
+        let name = format!("{dir}/id_ed25519");
+        let bytes = read_limited(root.file(&name, false)?, 16384)?;
+        let key = russh::keys::PrivateKey::from_openssh(&bytes).map_err(internal)?;
+        if key.is_encrypted() || key.algorithm() != russh::keys::Algorithm::Ed25519 {
+            return Err(SafeError::validation());
+        }
+        files.push(name);
+    }
+    Ok(())
+}
+
 fn create_child(root: &DataRoot, name: &str) -> Result<(), SafeError> {
     match rustix::fs::mkdirat(
         &root.directory,

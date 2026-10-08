@@ -88,45 +88,51 @@ fn markers(text: &str, marker: &str) -> Vec<(usize, usize)> {
         if delimiter.is_none() && line.trim() == marker {
             matches.push((offset, offset + line.len()));
         }
-        let bytes = line.as_bytes();
-        let mut at = 0;
-        while at < bytes.len() {
-            if let Some(quote) = delimiter {
-                if quote[0] == b'"' && bytes[at] == b'\\' {
-                    at = (at + 2).min(bytes.len());
-                    continue;
-                }
-                if bytes[at..].starts_with(quote) {
-                    at += quote.len();
-                    delimiter = None;
-                } else {
-                    at += 1;
-                }
-            } else {
-                if bytes[at] == b'#' {
-                    break;
-                }
-                if bytes[at..].starts_with(b"\"\"\"") {
-                    delimiter = Some(b"\"\"\"");
-                    at += 3;
-                } else if bytes[at..].starts_with(&[39; 3]) {
-                    delimiter = Some(&[39; 3]);
-                    at += 3;
-                } else if bytes[at] == b'"' {
-                    delimiter = Some(b"\"");
-                    at += 1;
-                } else if bytes[at] == b'\'' {
-                    delimiter = Some(b"'");
-                    at += 1;
-                } else {
-                    at += 1;
-                }
-            }
-        }
+        scan_marker_line(line.as_bytes(), &mut delimiter);
         offset += line.len();
     }
     matches
 }
+fn scan_marker_line(bytes: &[u8], delimiter: &mut Option<&'static [u8]>) {
+    let mut at = 0;
+    while at < bytes.len() {
+        if let Some(quote) = *delimiter {
+            at = advance_quoted(bytes, at, quote, delimiter);
+            continue;
+        }
+        if bytes[at] == b'#' {
+            break;
+        }
+        if let Some(quote) = starting_quote(&bytes[at..]) {
+            *delimiter = Some(quote);
+            at += quote.len();
+        } else {
+            at += 1;
+        }
+    }
+}
+fn advance_quoted(
+    bytes: &[u8],
+    at: usize,
+    quote: &[u8],
+    delimiter: &mut Option<&'static [u8]>,
+) -> usize {
+    if quote[0] == b'"' && bytes[at] == b'\\' {
+        return (at + 2).min(bytes.len());
+    }
+    if bytes[at..].starts_with(quote) {
+        *delimiter = None;
+        at + quote.len()
+    } else {
+        at + 1
+    }
+}
+fn starting_quote(bytes: &[u8]) -> Option<&'static [u8]> {
+    [b"\"\"\"".as_slice(), &[39; 3], b"\"", b"'"]
+        .into_iter()
+        .find(|&quote| bytes.starts_with(quote))
+}
+
 fn section(text: &str, name: &str, generated: &str) -> io::Result<String> {
     let begin = format!("# BEGIN HA-WOLF-MANAGER GENERATED {name} APPS");
     let end = format!("# END HA-WOLF-MANAGER GENERATED {name} APPS");
@@ -157,25 +163,7 @@ fn section(text: &str, name: &str, generated: &str) -> io::Result<String> {
             "USER" => "user",
             _ => return Err(invalid()),
         };
-        let headers = markers(text, "[[profiles]]");
-        let mut insertion = None;
-        for (index, header) in headers.iter().enumerate() {
-            let end = headers.get(index + 1).map_or(text.len(), |next| next.0);
-            let profile: toml::Table =
-                toml::from_str(&text[header.0..end]).map_err(|_| invalid())?;
-            let id = profile
-                .get("profiles")
-                .and_then(toml::Value::as_array)
-                .and_then(|profiles| profiles.first())
-                .and_then(|profile| profile.get("id"))
-                .and_then(toml::Value::as_str);
-            if id == Some(profile_id) {
-                if insertion.is_some() {
-                    return Err(invalid());
-                }
-                insertion = Some(end);
-            }
-        }
+        let insertion = profile_insertion(text, profile_id)?;
         let Some(position) = insertion else {
             // Empty sections do not require inventing a missing profile.
             if generated.is_empty() {
@@ -187,6 +175,28 @@ fn section(text: &str, name: &str, generated: &str) -> io::Result<String> {
     }
     Ok(result)
 }
+fn profile_insertion(text: &str, profile_id: &str) -> io::Result<Option<usize>> {
+    let headers = markers(text, "[[profiles]]");
+    let mut insertion = None;
+    for (index, header) in headers.iter().enumerate() {
+        let end = headers.get(index + 1).map_or(text.len(), |next| next.0);
+        let profile: toml::Table = toml::from_str(&text[header.0..end]).map_err(|_| invalid())?;
+        let id = profile
+            .get("profiles")
+            .and_then(toml::Value::as_array)
+            .and_then(|profiles| profiles.first())
+            .and_then(|profile| profile.get("id"))
+            .and_then(toml::Value::as_str);
+        if id == Some(profile_id) {
+            if insertion.is_some() {
+                return Err(invalid());
+            }
+            insertion = Some(end);
+        }
+    }
+    Ok(insertion)
+}
+
 pub fn generated_sections(original: &str, moonlight: &str, user: &str) -> io::Result<String> {
     original.parse::<toml::Table>().map_err(|_| invalid())?;
     let result = section(&section(original, "MOONLIGHT", moonlight)?, "USER", user)?;
@@ -204,22 +214,7 @@ pub fn libraryfolders(
         if !host.starts_with('/') || !container.starts_with('/') || !mapping.insert(host) {
             return Err(invalid());
         }
-        let keys = doc.keys(&["libraryfolders"])?;
-        let mut chosen = None;
-        let mut next = 0u64;
-        for key in keys {
-            let index = key.parse::<u64>().map_err(|_| invalid())?;
-            next = next.max(index.checked_add(1).ok_or_else(invalid)?);
-            if let Some(path) = doc.get(&["libraryfolders", &key, "path"])?
-                && (path == *host || path == *container)
-            {
-                if chosen.is_some() {
-                    return Err(invalid());
-                }
-                chosen = Some(key);
-            }
-        }
-        let key = chosen.unwrap_or_else(|| next.to_string());
+        let key = library_key(&doc, host, container)?;
         doc.set(&["libraryfolders", &key, "path"], container)?;
         for app in apps {
             let path = ["libraryfolders", &key, "apps", app.as_str()];
@@ -229,4 +224,22 @@ pub fn libraryfolders(
         }
     }
     Ok(doc.text().to_owned())
+}
+
+fn library_key(doc: &Document, host: &str, container: &str) -> io::Result<String> {
+    let mut chosen = None;
+    let mut next = 0u64;
+    for key in doc.keys(&["libraryfolders"])? {
+        let index = key.parse::<u64>().map_err(|_| invalid())?;
+        next = next.max(index.checked_add(1).ok_or_else(invalid)?);
+        if let Some(path) = doc.get(&["libraryfolders", &key, "path"])?
+            && (path == host || path == container)
+        {
+            if chosen.is_some() {
+                return Err(invalid());
+            }
+            chosen = Some(key);
+        }
+    }
+    Ok(chosen.unwrap_or_else(|| next.to_string()))
 }

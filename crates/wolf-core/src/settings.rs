@@ -135,75 +135,107 @@ impl Settings {
             .get("parameters")
             .and_then(serde_json::Value::as_object)
         {
-            for (id, raw) in definitions {
-                let Ok(id) = ParameterId::new(id.trim()) else {
-                    continue;
-                };
-                let Some(raw) = raw.as_object() else { continue };
-                let definition = ParameterDefinition {
-                    label: legacy_string(raw.get("label"))
-                        .unwrap_or_else(|| id.to_string())
-                        .trim()
-                        .into(),
-                    launch_options: legacy_string(raw.get("launch_options"))
-                        .unwrap_or_default()
-                        .trim()
-                        .into(),
-                    description: legacy_string(raw.get("description"))
-                        .unwrap_or_default()
-                        .trim()
-                        .into(),
-                };
-                if definition.label.is_empty()
-                    || definition.launch_options.is_empty()
-                    || definition.launch_options.contains(['\r', '\n', '\0'])
-                {
-                    continue;
-                }
-                // A valid prototype definition outside a hard transport limit
-                // refuses the complete migration instead of dropping its data.
-                definition.validate()?;
-                result.parameters.insert(id, definition);
-            }
+            import_legacy_parameters(&mut result, definitions)?;
         }
         if let Some(games) = object.get("games").and_then(serde_json::Value::as_object) {
-            for (id, raw) in games {
-                let Ok(id) = AppId::new(id) else { continue };
-                let Some(raw) = raw.as_object() else { continue };
-                let mut parameters = Vec::new();
-                if let Some(selected) = raw.get("parameters").and_then(serde_json::Value::as_array)
-                {
-                    for item in selected {
-                        if let Some(text) = legacy_string(Some(item))
-                            && let Ok(id) = ParameterId::new(text)
-                            && result.parameters.contains_key(&id)
-                            && !parameters.contains(&id)
-                        {
-                            parameters.push(id);
-                        }
-                    }
-                }
-                for builtin in ["fsr4", "fsr4_indicator"] {
-                    let id = ParameterId::new(builtin)?;
-                    if truthy(raw.get(builtin)) && !parameters.contains(&id) {
-                        parameters.push(id);
-                    }
-                }
-                result.games.insert(
-                    id,
-                    GameSettings {
-                        direct_launch: truthy(raw.get("direct_launch")),
-                        proton_cachyos: truthy(raw.get("proton_cachyos")),
-                        parameters,
-                    },
-                );
-            }
+            import_legacy_games(&mut result, games)?;
         }
         result.debug.test_ball = truthy(object.get("debug").and_then(|v| v.get("test_ball")));
         result.validate()?;
         Ok(result)
     }
 }
+fn import_legacy_parameters(
+    result: &mut Settings,
+    definitions: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(), SafeError> {
+    for (id, raw) in definitions {
+        let Ok(id) = ParameterId::new(id.trim()) else {
+            continue;
+        };
+        let Some(definition) = legacy_definition(&id, raw)? else {
+            continue;
+        };
+        result.parameters.insert(id, definition);
+    }
+    Ok(())
+}
+fn import_legacy_games(
+    result: &mut Settings,
+    games: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(), SafeError> {
+    for (id, raw) in games {
+        let Ok(id) = AppId::new(id) else { continue };
+        let Some(raw) = raw.as_object() else { continue };
+        let parameters = legacy_selected_parameters(raw, &result.parameters)?;
+        result.games.insert(
+            id,
+            GameSettings {
+                direct_launch: truthy(raw.get("direct_launch")),
+                proton_cachyos: truthy(raw.get("proton_cachyos")),
+                parameters,
+            },
+        );
+    }
+    Ok(())
+}
+fn legacy_definition(
+    id: &ParameterId,
+    raw: &serde_json::Value,
+) -> Result<Option<ParameterDefinition>, SafeError> {
+    let Some(raw) = raw.as_object() else {
+        return Ok(None);
+    };
+    let definition = ParameterDefinition {
+        label: legacy_string(raw.get("label"))
+            .unwrap_or_else(|| id.to_string())
+            .trim()
+            .into(),
+        launch_options: legacy_string(raw.get("launch_options"))
+            .unwrap_or_default()
+            .trim()
+            .into(),
+        description: legacy_string(raw.get("description"))
+            .unwrap_or_default()
+            .trim()
+            .into(),
+    };
+    if definition.label.is_empty()
+        || definition.launch_options.is_empty()
+        || definition.launch_options.contains(['\r', '\n', '\0'])
+    {
+        return Ok(None);
+    }
+    // A valid prototype definition beyond a transport limit refuses the whole migration.
+    definition.validate()?;
+    Ok(Some(definition))
+}
+
+fn legacy_selected_parameters(
+    raw: &serde_json::Map<String, serde_json::Value>,
+    definitions: &BTreeMap<ParameterId, ParameterDefinition>,
+) -> Result<Vec<ParameterId>, SafeError> {
+    let mut parameters = Vec::new();
+    if let Some(selected) = raw.get("parameters").and_then(serde_json::Value::as_array) {
+        for item in selected {
+            if let Some(text) = legacy_string(Some(item))
+                && let Ok(id) = ParameterId::new(text)
+                && definitions.contains_key(&id)
+                && !parameters.contains(&id)
+            {
+                parameters.push(id);
+            }
+        }
+    }
+    for builtin in ["fsr4", "fsr4_indicator"] {
+        let id = ParameterId::new(builtin)?;
+        if truthy(raw.get(builtin)) && !parameters.contains(&id) {
+            parameters.push(id);
+        }
+    }
+    Ok(parameters)
+}
+
 fn truthy(value: Option<&serde_json::Value>) -> bool {
     match value {
         None | Some(serde_json::Value::Null) => false,

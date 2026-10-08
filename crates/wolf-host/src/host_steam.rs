@@ -10,81 +10,18 @@ fn invalid() -> io::Error {
 }
 pub fn runner(policy: &RootPolicy) -> io::Result<toml::Table> {
     let mut runner = policy.steam_runner.clone();
-    let existing = runner
-        .get("mounts")
-        .map(|v| v.as_array().cloned().ok_or_else(invalid))
-        .transpose()?
-        .unwrap_or_default();
-    let mut mounts = BTreeMap::<String, String>::new();
-    for value in existing {
-        let value = value.as_str().ok_or_else(invalid)?;
-        let parts = value.split(':').collect::<Vec<_>>();
-        if parts.len() < 2
-            || parts.len() > 3
-            || !parts[0].starts_with('/')
-            || !parts[1].starts_with('/')
-        {
-            return Err(invalid());
-        }
-        if mounts
-            .insert(parts[1].to_owned(), value.to_owned())
-            .is_some()
-        {
-            return Err(invalid());
-        }
-    }
-    let mut insert = |host: &Path, destination: &Path, mode: &str| -> io::Result<()> {
-        let host = host.to_str().ok_or_else(invalid)?;
-        let destination = destination.to_str().ok_or_else(invalid)?;
-        if !host.starts_with('/')
-            || !destination.starts_with('/')
-            || host.contains([':', '\n', '\r'])
-            || destination.contains([':', '\n', '\r'])
-        {
-            return Err(invalid());
-        }
-        let value = format!("{host}:{destination}:{mode}");
-        if let Some(old) = mounts.get(destination)
-            && old != &value
-        {
-            return Err(io::Error::other(
-                "runner destination conflicts with authorized storage mapping",
-            ));
-        }
-        mounts.insert(destination.to_owned(), value);
-        Ok(())
-    };
+    let mut mounts = existing_mounts(&runner)?;
     for library in &policy.libraries {
         for destination in &library.container_paths {
-            insert(&library.steamapps_path, destination, "rw")?;
+            insert_mount(&mut mounts, &library.steamapps_path, destination, "rw")?;
         }
     }
     for profile in &policy.steam_profiles {
-        if profile.container_userdata_paths.is_empty() {
-            return Err(io::Error::other(
-                "profile config requires an authorized container userdata mapping",
-            ));
-        }
-        for destination in &profile.container_userdata_paths {
-            if destination.file_name().and_then(|n| n.to_str()) != Some("userdata") {
-                return Err(invalid());
-            }
-            let base = destination.parent().ok_or_else(invalid)?;
-            insert(
-                &profile.root.join(&profile.config_vdf),
-                &base.join("config/config.vdf"),
-                "rw",
-            )?;
-            insert(
-                &profile.root.join(&profile.userdata_directory),
-                destination,
-                "rw",
-            )?;
-        }
+        insert_profile_mounts(&mut mounts, profile)?;
     }
     if let Some(proton) = &policy.proton {
         for destination in &proton.container_paths {
-            insert(&proton.host_path, destination, "ro")?;
+            insert_mount(&mut mounts, &proton.host_path, destination, "ro")?;
         }
     }
     runner.insert(
@@ -147,6 +84,88 @@ fn bounded_plan(changes: &[(usize, String, Vec<u8>, Vec<u8>)]) -> io::Result<()>
     }
     Ok(())
 }
+fn existing_mounts(runner: &toml::Table) -> io::Result<BTreeMap<String, String>> {
+    let existing = runner
+        .get("mounts")
+        .map(|v| v.as_array().cloned().ok_or_else(invalid))
+        .transpose()?
+        .unwrap_or_default();
+    let mut mounts = BTreeMap::<String, String>::new();
+    for value in existing {
+        let value = value.as_str().ok_or_else(invalid)?;
+        let parts = value.split(':').collect::<Vec<_>>();
+        if parts.len() < 2
+            || parts.len() > 3
+            || !parts[0].starts_with('/')
+            || !parts[1].starts_with('/')
+        {
+            return Err(invalid());
+        }
+        if mounts
+            .insert(parts[1].to_owned(), value.to_owned())
+            .is_some()
+        {
+            return Err(invalid());
+        }
+    }
+    Ok(mounts)
+}
+fn insert_mount(
+    mounts: &mut BTreeMap<String, String>,
+    host: &Path,
+    destination: &Path,
+    mode: &str,
+) -> io::Result<()> {
+    let host = host.to_str().ok_or_else(invalid)?;
+    let destination = destination.to_str().ok_or_else(invalid)?;
+    if !host.starts_with('/')
+        || !destination.starts_with('/')
+        || host.contains([':', '\n', '\r'])
+        || destination.contains([':', '\n', '\r'])
+    {
+        return Err(invalid());
+    }
+    let value = format!("{host}:{destination}:{mode}");
+    if let Some(old) = mounts.get(destination)
+        && old != &value
+    {
+        return Err(io::Error::other(
+            "runner destination conflicts with authorized storage mapping",
+        ));
+    }
+    mounts.insert(destination.to_owned(), value);
+    Ok(())
+}
+fn insert_profile_mounts(
+    mounts: &mut BTreeMap<String, String>,
+    profile: &crate::policy::ProfileGrant,
+) -> io::Result<()> {
+    if profile.container_userdata_paths.is_empty() {
+        return Err(io::Error::other(
+            "profile config requires an authorized container userdata mapping",
+        ));
+    }
+    for destination in &profile.container_userdata_paths {
+        if destination.file_name().and_then(|n| n.to_str()) != Some("userdata") {
+            return Err(invalid());
+        }
+        let base = destination.parent().ok_or_else(invalid)?;
+        insert_mount(
+            mounts,
+            &profile.root.join(&profile.config_vdf),
+            &base.join("config/config.vdf"),
+            "rw",
+        )?;
+        insert_mount(
+            mounts,
+            &profile.root.join(&profile.userdata_directory),
+            destination,
+            "rw",
+        )?;
+    }
+    Ok(())
+}
+
 pub fn prepare(policy: &RootPolicy, settings: &Settings) -> io::Result<()> {
     policy.validate()?;
     crate::host_runtime::require_no_container_writers(
@@ -221,7 +240,6 @@ fn prepare_impl(
         }
         needs_localconfig |= !options.is_empty();
     }
-    let mut localconfig_count = 0usize;
     let mut mappings = Vec::new();
     for library in &policy.libraries {
         let host = library
@@ -247,71 +265,13 @@ fn prepare_impl(
         .iter()
         .map(|profile| Grant::for_owner(&profile.root, policy.steam_uid, policy.steam_gid))
         .collect::<io::Result<Vec<_>>>()?;
-    let mut changes: Vec<(usize, String, Vec<u8>, Vec<u8>)> = Vec::new();
-    for (index, profile) in policy.steam_profiles.iter().enumerate() {
-        let grant = &grants[index];
-        if let Some(proton) = &policy.proton {
-            let original = grant.read(&profile.config_vdf)?;
-            let text = std::str::from_utf8(&original).map_err(|_| invalid())?;
-            changes.push((
-                index,
-                profile.config_vdf.clone(),
-                crate::steam::compatibility(text, &active_settings, &proton.name)?.into_bytes(),
-                original,
-            ));
-            bounded_plan(&changes)?;
-        }
-        for relative in &profile.libraryfolders_vdf {
-            let original = grant.read(relative)?;
-            let text = std::str::from_utf8(&original).map_err(|_| invalid())?;
-            changes.push((
-                index,
-                relative.clone(),
-                crate::steam::libraryfolders(text, &mappings)?.into_bytes(),
-                original,
-            ));
-            bounded_plan(&changes)?;
-        }
-        let userdata = profile.root.join(&profile.userdata_directory);
-        let mut accounts = fs::read_dir(&userdata)?
-            .take(1001)
-            .collect::<io::Result<Vec<_>>>()?;
-        if accounts.len() > 1000 {
-            return Err(invalid());
-        }
-        accounts.sort_by_key(|e| e.file_name());
-        for account in accounts {
-            let name = account.file_name();
-            let name = name.to_str().ok_or_else(invalid)?;
-            if name.is_empty() || !name.bytes().all(|b| b.is_ascii_digit()) {
-                continue;
-            }
-            let relative = format!(
-                "{}/{name}/config/localconfig.vdf",
-                profile.userdata_directory
-            );
-            match fs::symlink_metadata(profile.root.join(&relative)) {
-                Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
-                Err(e) => return Err(e),
-                Ok(_) => {}
-            }
-            let original = grant.read(&relative)?;
-            localconfig_count += 1;
-            let text = std::str::from_utf8(&original).map_err(|_| invalid())?;
-            changes.push((
-                index,
-                relative,
-                crate::steam::localconfig(text, &active_settings)?.into_bytes(),
-                original,
-            ));
-            bounded_plan(&changes)?;
-        }
-    }
-    if needs_localconfig && localconfig_count == 0 {
-        return Err(io::Error::other(
-            "Steam login must initialize an owned localconfig before launch options can apply",
-        ));
-    }
+    let changes = plan_steam_overlays(
+        policy,
+        &active_settings,
+        &grants,
+        &mappings,
+        needs_localconfig,
+    )?;
     let mut targets = std::collections::BTreeSet::new();
     for (index, relative, _, _) in &changes {
         if !targets.insert(policy.steam_profiles[*index].root.join(relative)) {
@@ -367,6 +327,95 @@ fn prepare_impl(
     }
     Ok(())
 }
+type SteamChange = (usize, String, Vec<u8>, Vec<u8>);
+fn plan_steam_overlays(
+    policy: &RootPolicy,
+    active_settings: &Settings,
+    grants: &[Grant],
+    mappings: &[(String, String, Vec<wolf_core::AppId>)],
+    needs_localconfig: bool,
+) -> io::Result<Vec<SteamChange>> {
+    let mut changes = Vec::new();
+    let mut localconfig_count = 0usize;
+    for (index, profile) in policy.steam_profiles.iter().enumerate() {
+        let grant = &grants[index];
+        if let Some(proton) = &policy.proton {
+            let original = grant.read(&profile.config_vdf)?;
+            let text = std::str::from_utf8(&original).map_err(|_| invalid())?;
+            changes.push((
+                index,
+                profile.config_vdf.clone(),
+                crate::steam::compatibility(text, active_settings, &proton.name)?.into_bytes(),
+                original,
+            ));
+            bounded_plan(&changes)?;
+        }
+        for relative in &profile.libraryfolders_vdf {
+            let original = grant.read(relative)?;
+            let text = std::str::from_utf8(&original).map_err(|_| invalid())?;
+            changes.push((
+                index,
+                relative.clone(),
+                crate::steam::libraryfolders(text, mappings)?.into_bytes(),
+                original,
+            ));
+            bounded_plan(&changes)?;
+        }
+        localconfig_count +=
+            append_localconfig_changes(index, profile, grant, active_settings, &mut changes)?;
+    }
+    if needs_localconfig && localconfig_count == 0 {
+        return Err(io::Error::other(
+            "Steam login must initialize an owned localconfig before launch options can apply",
+        ));
+    }
+    Ok(changes)
+}
+fn append_localconfig_changes(
+    index: usize,
+    profile: &crate::policy::ProfileGrant,
+    grant: &Grant,
+    active_settings: &Settings,
+    changes: &mut Vec<SteamChange>,
+) -> io::Result<usize> {
+    let mut localconfig_count = 0usize;
+    let userdata = profile.root.join(&profile.userdata_directory);
+    let mut accounts = fs::read_dir(&userdata)?
+        .take(1001)
+        .collect::<io::Result<Vec<_>>>()?;
+    if accounts.len() > 1000 {
+        return Err(invalid());
+    }
+    accounts.sort_by_key(|e| e.file_name());
+    for account in accounts {
+        let name = account.file_name();
+        let name = name.to_str().ok_or_else(invalid)?;
+        if name.is_empty() || !name.bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        let relative = format!(
+            "{}/{name}/config/localconfig.vdf",
+            profile.userdata_directory
+        );
+        match fs::symlink_metadata(profile.root.join(&relative)) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e),
+            Ok(_) => {}
+        }
+        let original = grant.read(&relative)?;
+        localconfig_count += 1;
+        let text = std::str::from_utf8(&original).map_err(|_| invalid())?;
+        changes.push((
+            index,
+            relative,
+            crate::steam::localconfig(text, active_settings)?.into_bytes(),
+            original,
+        ));
+        bounded_plan(changes)?;
+    }
+    Ok(localconfig_count)
+}
+
 fn restore_overlays(
     policy: &RootPolicy,
     store: &TransactionStore,

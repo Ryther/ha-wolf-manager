@@ -49,38 +49,7 @@ impl Parser<'_> {
         let start = self.position;
         let bytes = self.text.as_bytes();
         if bytes.get(start) == Some(&b'"') {
-            self.position += 1;
-            let mut decoded = String::new();
-            loop {
-                let ch = self.text[self.position..]
-                    .chars()
-                    .next()
-                    .ok_or_else(invalid)?;
-                self.position += ch.len_utf8();
-                match ch {
-                    '"' => break,
-                    '\\' => {
-                        let escaped = self.text[self.position..]
-                            .chars()
-                            .next()
-                            .ok_or_else(invalid)?;
-                        self.position += escaped.len_utf8();
-                        match escaped {
-                            'n' => decoded.push('\n'),
-                            'r' => decoded.push('\r'),
-                            't' => decoded.push('\t'),
-                            '"' | '\\' => decoded.push(escaped),
-                            other => {
-                                decoded.push('\\');
-                                decoded.push(other);
-                            }
-                        }
-                    }
-                    '\0' => return Err(invalid()),
-                    other => decoded.push(other),
-                }
-            }
-            Ok((decoded, start..self.position))
+            self.quoted_string(start)
         } else {
             while let Some(byte) = bytes.get(self.position) {
                 if byte.is_ascii_whitespace() || b"{}".contains(byte) {
@@ -97,6 +66,40 @@ impl Parser<'_> {
             ))
         }
     }
+    fn quoted_string(&mut self, start: usize) -> io::Result<(String, Range<usize>)> {
+        self.position += 1;
+        let mut decoded = String::new();
+        loop {
+            let ch = self.text[self.position..]
+                .chars()
+                .next()
+                .ok_or_else(invalid)?;
+            self.position += ch.len_utf8();
+            match ch {
+                '"' => break,
+                '\\' => {
+                    let escaped = self.text[self.position..]
+                        .chars()
+                        .next()
+                        .ok_or_else(invalid)?;
+                    self.position += escaped.len_utf8();
+                    match escaped {
+                        'n' => decoded.push('\n'),
+                        'r' => decoded.push('\r'),
+                        't' => decoded.push('\t'),
+                        '"' | '\\' => decoded.push(escaped),
+                        other => {
+                            decoded.push('\\');
+                            decoded.push(other);
+                        }
+                    }
+                }
+                '\0' => return Err(invalid()),
+                other => decoded.push(other),
+            }
+        }
+        Ok((decoded, start..self.position))
+    }
     fn object(&mut self, nested: bool, depth: usize) -> io::Result<Object> {
         if depth > 64 {
             return Err(invalid());
@@ -104,23 +107,8 @@ impl Parser<'_> {
         let mut entries = Vec::new();
         loop {
             self.skip();
-            let next = self.text.as_bytes().get(self.position);
-            if next == Some(&b'}') {
-                if !nested {
-                    return Err(invalid());
-                }
-                let close = self.position;
-                self.position += 1;
+            if let Some(close) = self.object_end(nested)? {
                 return Ok(Object { entries, close });
-            }
-            if next.is_none() {
-                if nested {
-                    return Err(invalid());
-                }
-                return Ok(Object {
-                    entries,
-                    close: self.position,
-                });
             }
             self.count += 1;
             if self.count > 100000 {
@@ -141,6 +129,24 @@ impl Parser<'_> {
                 value,
             });
         }
+    }
+    fn object_end(&mut self, nested: bool) -> io::Result<Option<usize>> {
+        let next = self.text.as_bytes().get(self.position);
+        if next == Some(&b'}') {
+            if !nested {
+                return Err(invalid());
+            }
+            let close = self.position;
+            self.position += 1;
+            return Ok(Some(close));
+        }
+        if next.is_none() {
+            if nested {
+                return Err(invalid());
+            }
+            return Ok(Some(self.position));
+        }
+        Ok(None)
     }
 }
 fn find<'a>(object: &'a Object, key: &str) -> io::Result<Option<&'a Entry>> {

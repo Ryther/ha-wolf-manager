@@ -21,6 +21,75 @@ pub struct Store {
     pub(crate) conn: Connection,
     pub(crate) root: DataRoot,
 }
+fn inspect_existing(root: &DataRoot, marker: bool, recovery: bool) -> Result<i64, SafeError> {
+    root.file("manager.sqlite3", false)?;
+    for suffix in [
+        "manager.sqlite3-wal",
+        "manager.sqlite3-shm",
+        "manager.sqlite3-journal",
+    ] {
+        if std::fs::symlink_metadata(root.path(suffix)).is_ok() {
+            root.file(suffix, false)?;
+        }
+    }
+    let readonly = Connection::open_with_flags(
+        root.sqlite_path("manager.sqlite3")?,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )
+    .map_err(internal)?;
+    let integrity: String = readonly
+        .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+        .map_err(internal)?;
+    if integrity != "ok" {
+        return Err(SafeError::new("internal_error"));
+    }
+    let has_migrations:bool=readonly.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations')",[],|r|r.get(0)).map_err(internal)?;
+    let version = inspect_schema(&readonly, marker, recovery, has_migrations)?;
+    if version == 0 {
+        backup(root, &readonly, 0)?;
+    }
+    Ok(version)
+}
+
+fn inspect_schema(
+    readonly: &Connection,
+    marker: bool,
+    recovery: bool,
+    has_migrations: bool,
+) -> Result<i64, SafeError> {
+    let mut version = 0;
+    if has_migrations {
+        let rows = readonly
+            .prepare("SELECT version,checksum FROM schema_migrations ORDER BY version")
+            .map_err(internal)?
+            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)))
+            .map_err(internal)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(internal)?;
+        if rows.len() != 1 || rows[0].0 != 1 || rows[0].1 != hash(MIGRATION.as_bytes()) {
+            return Err(SafeError::new("internal_error"));
+        }
+        version = 1;
+        let initialized: bool = readonly
+            .query_row("SELECT EXISTS(SELECT 1 FROM administrator)", [], |r| {
+                r.get(0)
+            })
+            .map_err(internal)?;
+        if marker && !initialized && !recovery {
+            return Err(SafeError::new("bootstrap_completed"));
+        }
+    } else {
+        let count: i64 = readonly
+            .query_row("SELECT count(*) FROM sqlite_master", [], |r| r.get(0))
+            .map_err(internal)?;
+        if count != 0 || marker {
+            return Err(SafeError::new("internal_error"));
+        }
+    }
+
+    Ok(version)
+}
+
 impl Store {
     pub fn open(path: &Path, now: i64) -> Result<Self, SafeError> {
         Self::open_inner(path, now, false)
@@ -37,59 +106,7 @@ impl Store {
         }
         let mut version = 0;
         if exists {
-            root.file("manager.sqlite3", false)?;
-            for suffix in [
-                "manager.sqlite3-wal",
-                "manager.sqlite3-shm",
-                "manager.sqlite3-journal",
-            ] {
-                if std::fs::symlink_metadata(root.path(suffix)).is_ok() {
-                    root.file(suffix, false)?;
-                }
-            }
-            let readonly = Connection::open_with_flags(
-                root.sqlite_path("manager.sqlite3")?,
-                OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW,
-            )
-            .map_err(internal)?;
-            let integrity: String = readonly
-                .query_row("PRAGMA integrity_check", [], |row| row.get(0))
-                .map_err(internal)?;
-            if integrity != "ok" {
-                return Err(SafeError::new("internal_error"));
-            }
-            let has_migrations:bool=readonly.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations')",[],|r|r.get(0)).map_err(internal)?;
-            if has_migrations {
-                let rows = readonly
-                    .prepare("SELECT version,checksum FROM schema_migrations ORDER BY version")
-                    .map_err(internal)?
-                    .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)))
-                    .map_err(internal)?
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(internal)?;
-                if rows.len() != 1 || rows[0].0 != 1 || rows[0].1 != hash(MIGRATION.as_bytes()) {
-                    return Err(SafeError::new("internal_error"));
-                }
-                version = 1;
-                let initialized: bool = readonly
-                    .query_row("SELECT EXISTS(SELECT 1 FROM administrator)", [], |r| {
-                        r.get(0)
-                    })
-                    .map_err(internal)?;
-                if marker && !initialized && !recovery {
-                    return Err(SafeError::new("bootstrap_completed"));
-                }
-            } else {
-                let count: i64 = readonly
-                    .query_row("SELECT count(*) FROM sqlite_master", [], |r| r.get(0))
-                    .map_err(internal)?;
-                if count != 0 || marker {
-                    return Err(SafeError::new("internal_error"));
-                }
-            }
-            if version == 0 {
-                backup(&root, &readonly, 0)?;
-            }
+            version = inspect_existing(&root, marker, recovery)?;
         } else {
             root.file("manager.sqlite3", true)?
                 .sync_all()

@@ -76,6 +76,9 @@ impl JournalObservation {
         if self.canonical_request_sha256.is_none() {
             return Err(SafeError::validation());
         }
+        self.validate_phase(depth)
+    }
+    fn validate_phase(&self, depth: usize) -> Result<(), SafeError> {
         match self.phase {
             Some(JournalPhase::Succeeded) => {
                 let result = self.result.as_ref().ok_or_else(SafeError::validation)?;
@@ -155,73 +158,26 @@ pub fn reconcile_children(
         code: Some("unknown_interrupted"),
         stage_succeeded: false,
     };
-    if children.is_empty()
-        || children
-            .iter()
-            .enumerate()
-            .any(|(i, c)| c.ordinal as usize != i)
-    {
+    if !valid_children(children) || !observations_belong_to_children(children, observations) {
         return unknown();
     }
-    let valid_stage_plan = children.len() == 2
-        && children[0].kind == OperationKind::ApplySettings
-        && matches!(
-            children[1].kind,
-            OperationKind::Start | OperationKind::Restart
-        );
-    if children.len() != 1 && !valid_stage_plan {
-        return unknown();
-    }
-    if observations.iter().any(|o| {
-        !children.iter().any(|child| {
-            child.request_id == o.request_id && child.dispatch_phase != DispatchPhase::NotDispatched
-        })
-    }) {
-        return unknown();
-    }
-    let mut ids = std::collections::BTreeSet::new();
-    let mut ordinals = std::collections::BTreeSet::new();
+    let valid_stage_plan = children.len() == 2;
     let mut failed = false;
     let mut undispatched = false;
     let mut stage_succeeded = false;
     for child in children {
-        if !ids.insert(child.request_id)
-            || !ordinals.insert(child.ordinal)
-            || child.pc_id != children[0].pc_id
-        {
-            return unknown();
-        }
         if child.dispatch_phase == DispatchPhase::NotDispatched {
             undispatched = true;
             continue;
         }
-        let matching: Vec<_> = observations
-            .iter()
-            .filter(|o| o.request_id == child.request_id)
-            .collect();
-        if matching.len() != 1 {
+        let Some(phase) = terminal_child_phase(child, observations) else {
             return unknown();
-        }
-        let o = matching[0];
-        if o.validate().is_err()
-            || !o.found
-            || o.pc_id != child.pc_id
-            || o.canonical_request_sha256.as_ref() != Some(&child.canonical_request_sha256)
-        {
-            return unknown();
-        }
-        match o.phase {
-            Some(JournalPhase::Succeeded) => {
-                if o.result.as_ref().is_none_or(|result| {
-                    result.validate_for_kind(child.kind, &child.pc_id).is_err()
-                }) {
-                    return unknown();
-                }
-                if child.kind == OperationKind::ApplySettings {
-                    stage_succeeded = true;
-                }
+        };
+        match phase {
+            JournalPhase::Succeeded => {
+                stage_succeeded |= child.kind == OperationKind::ApplySettings
             }
-            Some(JournalPhase::Failed) => failed = true,
+            JournalPhase::Failed => failed = true,
             _ => return unknown(),
         }
     }
@@ -252,6 +208,66 @@ pub fn reconcile_children(
         stage_succeeded,
     }
 }
+fn valid_children(children: &[ChildRequest]) -> bool {
+    let Some(first) = children.first() else {
+        return false;
+    };
+    let valid_plan = children.len() == 1
+        || (children.len() == 2
+            && first.kind == OperationKind::ApplySettings
+            && matches!(
+                children[1].kind,
+                OperationKind::Start | OperationKind::Restart
+            ));
+    if !valid_plan {
+        return false;
+    }
+    let mut ids = std::collections::BTreeSet::new();
+    children.iter().enumerate().all(|(i, child)| {
+        child.ordinal as usize == i && child.pc_id == first.pc_id && ids.insert(child.request_id)
+    })
+}
+
+fn observations_belong_to_children(
+    children: &[ChildRequest],
+    observations: &[JournalObservation],
+) -> bool {
+    observations.iter().all(|observation| {
+        children.iter().any(|child| {
+            child.request_id == observation.request_id
+                && child.dispatch_phase != DispatchPhase::NotDispatched
+        })
+    })
+}
+
+fn terminal_child_phase(
+    child: &ChildRequest,
+    observations: &[JournalObservation],
+) -> Option<JournalPhase> {
+    let mut matching = observations
+        .iter()
+        .filter(|o| o.request_id == child.request_id);
+    let observation = matching.next()?;
+    if matching.next().is_some()
+        || observation.validate().is_err()
+        || !observation.found
+        || observation.pc_id != child.pc_id
+        || observation.canonical_request_sha256.as_ref() != Some(&child.canonical_request_sha256)
+    {
+        return None;
+    }
+    let phase = observation.phase?;
+    if phase == JournalPhase::Succeeded
+        && observation
+            .result
+            .as_ref()
+            .is_none_or(|result| result.validate_for_kind(child.kind, &child.pc_id).is_err())
+    {
+        return None;
+    }
+    Some(phase)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HostCapabilities {

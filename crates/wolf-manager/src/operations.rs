@@ -38,6 +38,71 @@ fn mutation(kind: OperationKind) -> bool {
             | OperationKind::Restart
     )
 }
+fn validate_operation_plan(
+    conn: &rusqlite::Connection,
+    pc: &PcId,
+    kind: OperationKind,
+    desired: Option<&Revision>,
+    requests: &[RpcRequest],
+) -> Result<std::collections::BTreeSet<Uuid>, SafeError> {
+    let valid = if matches!(kind, OperationKind::Start | OperationKind::Restart) {
+        requests.len() == 2
+            && operation_kind(&requests[0].operation) == OperationKind::ApplySettings
+            && operation_kind(&requests[1].operation) == kind
+    } else {
+        requests.len() == 1
+            && operation_kind(&requests[0].operation) == kind
+            && kind != OperationKind::RequestStatus
+    };
+    if !valid {
+        return Err(SafeError::validation());
+    }
+    let mut ids = std::collections::BTreeSet::new();
+    for request in requests {
+        request.validate_pc(pc)?;
+        if !ids.insert(request.request_id) || canonical_json(request)?.len() > RPC_MAX_BYTES {
+            return Err(SafeError::validation());
+        }
+    }
+    validate_plan_revision(conn, pc, kind, desired, requests)?;
+    Ok(ids)
+}
+
+fn validate_plan_revision(
+    conn: &rusqlite::Connection,
+    pc: &PcId,
+    kind: OperationKind,
+    desired: Option<&Revision>,
+    requests: &[RpcRequest],
+) -> Result<(), SafeError> {
+    if matches!(
+        kind,
+        OperationKind::ApplySettings | OperationKind::Start | OperationKind::Restart
+    ) {
+        let desired = desired.ok_or_else(SafeError::validation)?;
+        if load_settings(conn, pc)?.revision()? != *desired {
+            return Err(SafeError::new("stale_revision"));
+        }
+        for req in requests {
+            match &req.operation {
+                RpcOperation::ApplySettings(p) if p.revision != *desired => {
+                    return Err(SafeError::new("stale_revision"));
+                }
+                RpcOperation::Start(p) | RpcOperation::Restart(p)
+                    if p.expected_staged_revision != *desired =>
+                {
+                    return Err(SafeError::new("stale_revision"));
+                }
+                _ => {}
+            }
+        }
+    } else if desired.is_some() {
+        return Err(SafeError::validation());
+    }
+
+    Ok(())
+}
+
 impl Store {
     pub(crate) fn ensure_no_mutation(&self, pc: &PcId) -> Result<(), SafeError> {
         let unresolved: i64 = self
@@ -79,49 +144,7 @@ impl Store {
         if mutation(kind) {
             self.ensure_no_mutation(pc)?;
         }
-        let valid = if matches!(kind, OperationKind::Start | OperationKind::Restart) {
-            requests.len() == 2
-                && operation_kind(&requests[0].operation) == OperationKind::ApplySettings
-                && operation_kind(&requests[1].operation) == kind
-        } else {
-            requests.len() == 1
-                && operation_kind(&requests[0].operation) == kind
-                && kind != OperationKind::RequestStatus
-        };
-        if !valid {
-            return Err(SafeError::validation());
-        }
-        let mut ids = std::collections::BTreeSet::new();
-        for request in requests {
-            request.validate_pc(pc)?;
-            if !ids.insert(request.request_id) || canonical_json(request)?.len() > RPC_MAX_BYTES {
-                return Err(SafeError::validation());
-            }
-        }
-        if matches!(
-            kind,
-            OperationKind::ApplySettings | OperationKind::Start | OperationKind::Restart
-        ) {
-            let desired = desired.ok_or_else(SafeError::validation)?;
-            if load_settings(&self.conn, pc)?.revision()? != *desired {
-                return Err(SafeError::new("stale_revision"));
-            }
-            for req in requests {
-                match &req.operation {
-                    RpcOperation::ApplySettings(p) if p.revision != *desired => {
-                        return Err(SafeError::new("stale_revision"));
-                    }
-                    RpcOperation::Start(p) | RpcOperation::Restart(p)
-                        if p.expected_staged_revision != *desired =>
-                    {
-                        return Err(SafeError::new("stale_revision"));
-                    }
-                    _ => {}
-                }
-            }
-        } else if desired.is_some() {
-            return Err(SafeError::validation());
-        }
+        let ids = validate_operation_plan(&self.conn, pc, kind, desired, requests)?;
         let operation = Uuid::new_v4();
         if ids.contains(&operation) {
             return Err(SafeError::new("internal_error"));

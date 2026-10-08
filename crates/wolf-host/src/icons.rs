@@ -218,21 +218,7 @@ pub fn container_root(compose: &serde_json::Value, root: &Path, name: &str) -> i
     let mut targets = Vec::new();
     let mut other_targets = Vec::new();
     for volume in volumes {
-        let mapping = if let Some(s) = volume.as_str() {
-            let parts = s.split(':').collect::<Vec<_>>();
-            if parts.len() == 2 || parts.len() == 3 {
-                Some((parts[0], parts[1]))
-            } else {
-                None
-            }
-        } else if volume.get("type").and_then(serde_json::Value::as_str) == Some("bind") {
-            volume
-                .get("source")
-                .and_then(serde_json::Value::as_str)
-                .zip(volume.get("target").and_then(serde_json::Value::as_str))
-        } else {
-            None
-        };
+        let mapping = bind_mapping(volume);
         if let Some((source, target)) = mapping {
             absolute(Path::new(target))?;
             if Path::new(source) == root {
@@ -240,16 +226,10 @@ pub fn container_root(compose: &serde_json::Value, root: &Path, name: &str) -> i
             } else {
                 other_targets.push(PathBuf::from(target));
             }
-        } else if let Some(target) = volume.get("target").and_then(serde_json::Value::as_str) {
-            absolute(Path::new(target))?;
-            other_targets.push(PathBuf::from(target));
-        } else if let Some(text) = volume.as_str() {
-            let parts = text.split(':').collect::<Vec<_>>();
-            let target = parts.get(1).copied().unwrap_or(text);
-            absolute(Path::new(target))?;
-            other_targets.push(PathBuf::from(target));
         } else {
-            return Err(invalid());
+            let target = unmapped_target(volume)?;
+            absolute(Path::new(target))?;
+            other_targets.push(PathBuf::from(target));
         }
     }
     if targets.len() != 1 {
@@ -264,6 +244,30 @@ pub fn container_root(compose: &serde_json::Value, root: &Path, name: &str) -> i
         return Err(invalid());
     }
     Ok(target)
+}
+fn bind_mapping(volume: &serde_json::Value) -> Option<(&str, &str)> {
+    if let Some(s) = volume.as_str() {
+        let parts = s.split(':').collect::<Vec<_>>();
+        if parts.len() == 2 || parts.len() == 3 {
+            Some((parts[0], parts[1]))
+        } else {
+            None
+        }
+    } else if volume.get("type").and_then(serde_json::Value::as_str) == Some("bind") {
+        volume
+            .get("source")
+            .and_then(serde_json::Value::as_str)
+            .zip(volume.get("target").and_then(serde_json::Value::as_str))
+    } else {
+        None
+    }
+}
+fn unmapped_target(volume: &serde_json::Value) -> io::Result<&str> {
+    if let Some(target) = volume.get("target").and_then(serde_json::Value::as_str) {
+        return Ok(target);
+    }
+    let text = volume.as_str().ok_or_else(invalid)?;
+    Ok(text.split(':').nth(1).unwrap_or(text))
 }
 struct Http(reqwest::blocking::Client);
 impl Fetch for Http {

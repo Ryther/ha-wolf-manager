@@ -401,6 +401,12 @@ fn recipes(request: &InstallRequest) -> io::Result<Vec<Recipe>> {
         uid: 0,
         gid: 0,
     });
+    append_broker_recipe(request, &mut recipes)?;
+    append_initial_recipes(request, &mut recipes)?;
+    Ok(recipes)
+}
+
+fn append_broker_recipe(request: &InstallRequest, recipes: &mut Vec<Recipe>) -> io::Result<()> {
     if let Some(source) = &request.broker_config_source {
         let target = request
             .policy
@@ -421,36 +427,13 @@ fn recipes(request: &InstallRequest) -> io::Result<Vec<Recipe>> {
             gid: request.policy.steam_gid,
         });
     }
+    Ok(())
+}
+
+fn append_initial_recipes(request: &InstallRequest, recipes: &mut Vec<Recipe>) -> io::Result<()> {
     let mut initial_paths = std::collections::BTreeSet::new();
     for initial in &request.initial_files {
-        if request.mode != InstallMode::Install
-            || !initial_paths.insert(&initial.path)
-            || initial.uid != 0
-            || initial.gid != 0
-            || ![0o600, 0o644].contains(&initial.mode)
-            || initial.bytes.len() > 2 * 1024 * 1024
-        {
-            return Err(fail("invalid bootstrap file authority"));
-        }
-        if expected(&initial.path)?.is_some() {
-            return Err(fail("bootstrap defaults cannot replace existing state"));
-        }
-        if initial.path
-            == request
-                .policy
-                .wolf_config
-                .root
-                .join(&request.policy.wolf_config.relative_path)
-        {
-            let text = std::str::from_utf8(&initial.bytes)
-                .map_err(|_| fail("bootstrap Wolf config must be UTF8"))?;
-            let _: toml::Table =
-                toml::from_str(text).map_err(|_| fail("invalid initial Wolf TOML"))?;
-        } else if initial.path == request.policy.compose_file {
-            validate_compose_initial(&initial.bytes, &request.policy)?;
-        } else {
-            return Err(fail("bootstrap input path is not granted"));
-        }
+        validate_initial_file(request, initial, &mut initial_paths)?;
         recipes.insert(
             0,
             Recipe {
@@ -462,6 +445,48 @@ fn recipes(request: &InstallRequest) -> io::Result<Vec<Recipe>> {
             },
         );
     }
+    validate_required_sources(request, &initial_paths)
+}
+
+fn validate_initial_file<'a>(
+    request: &InstallRequest,
+    initial: &'a InitialFile,
+    initial_paths: &mut std::collections::BTreeSet<&'a PathBuf>,
+) -> io::Result<()> {
+    if request.mode != InstallMode::Install
+        || !initial_paths.insert(&initial.path)
+        || initial.uid != 0
+        || initial.gid != 0
+        || ![0o600, 0o644].contains(&initial.mode)
+        || initial.bytes.len() > 2 * 1024 * 1024
+    {
+        return Err(fail("invalid bootstrap file authority"));
+    }
+    if expected(&initial.path)?.is_some() {
+        return Err(fail("bootstrap defaults cannot replace existing state"));
+    }
+    if initial.path
+        == request
+            .policy
+            .wolf_config
+            .root
+            .join(&request.policy.wolf_config.relative_path)
+    {
+        let text = std::str::from_utf8(&initial.bytes)
+            .map_err(|_| fail("bootstrap Wolf config must be UTF8"))?;
+        let _: toml::Table = toml::from_str(text).map_err(|_| fail("invalid initial Wolf TOML"))?;
+    } else if initial.path == request.policy.compose_file {
+        validate_compose_initial(&initial.bytes, &request.policy)?;
+    } else {
+        return Err(fail("bootstrap input path is not granted"));
+    }
+    Ok(())
+}
+
+fn validate_required_sources(
+    request: &InstallRequest,
+    initial_paths: &std::collections::BTreeSet<&PathBuf>,
+) -> io::Result<()> {
     for required in [
         request
             .policy
@@ -479,8 +504,9 @@ fn recipes(request: &InstallRequest) -> io::Result<Vec<Recipe>> {
             trusted_path(&required, 0, false)?;
         }
     }
-    Ok(recipes)
+    Ok(())
 }
+
 fn validate_locked_home() -> io::Result<()> {
     let home = Path::new("/nonexistent");
     match fs::symlink_metadata(home) {
@@ -645,35 +671,7 @@ fn preflight_with(request: &InstallRequest, environment: &Environment) -> io::Re
     if !environment.fixture() {
         validate_ssh_policy_tree(Path::new("/etc/ssh/sshd_config"), Path::new("/etc/ssh"))?;
     }
-    let existing_policy_path = environment.path(Path::new("/etc/wolf-manager/host-policy.json"));
-    let existing_policy = existing_policy_path.as_path();
-    if existing_policy.exists() {
-        trusted_path(existing_policy, 0, false)?;
-        let previous: RootPolicy = serde_json::from_slice(&read(existing_policy)?.0)?;
-        if previous.pc_id != request.policy.pc_id {
-            return Err(fail(
-                "existing PC identity cannot change during installation",
-            ));
-        }
-        let old = serde_json::to_value(&previous)?;
-        let new = serde_json::to_value(&request.policy)?;
-        for field in [
-            "steam_uid",
-            "steam_gid",
-            "libraries",
-            "steam_profiles",
-            "wolf_config",
-            "compose_file",
-            "backup_root",
-            "state_root",
-        ] {
-            if old[field] != new[field] {
-                return Err(fail(
-                    "storage authority changed; explicit guarded migration is required",
-                ));
-            }
-        }
-    }
+    validate_existing_storage_authority(request, environment)?;
 
     pending(&request.policy)?;
     // The current upstream stable image is amd64-only. Do not silently emulate it.
@@ -707,31 +705,7 @@ fn preflight_with(request: &InstallRequest, environment: &Environment) -> io::Re
     } else {
         None
     };
-    let mut writes = Vec::new();
-    for r in recipes {
-        ancestor(&r.path)?;
-        let current = expected(&r.path)?;
-        if let Some(identity) = &current {
-            if identity.uid != r.uid || identity.gid != r.gid {
-                return Err(fail("existing destination ownership differs"));
-            }
-            if identity.sha256 != sha(&r.bytes)
-                && !previous
-                    .as_ref()
-                    .is_some_and(|p| p.installed_files.get(&r.path) == Some(identity))
-            {
-                return Err(fail("refusing an unrecognized existing destination"));
-            }
-        }
-        writes.push(PlannedWrite {
-            destination: r.path,
-            sha256: sha(&r.bytes),
-            mode: r.mode,
-            uid: r.uid,
-            gid: r.gid,
-            expected: current,
-        });
-    }
+    let writes = preview_writes(recipes, previous.as_ref())?;
     let mut mappings = Vec::new();
     for library in &request.policy.libraries {
         mappings.push(StorageMapping {
@@ -762,6 +736,72 @@ fn preflight_with(request: &InstallRequest, environment: &Environment) -> io::Re
     });
     Ok(InstallPlan{version:1,id:Uuid::new_v4(),mode:request.mode.clone(),policy:request.policy.clone(),storage_mapping:mappings,proposed_writes:writes.clone(),proposed_directories:planned_directories(&request.policy,&writes)?,initial_files:request.initial_files.clone(),source_binary:request.source_binary.clone(),source_identity,broker_config_source:request.broker_config_source.clone(),broker_identity,authorized_public_keys:request.authorized_public_keys.clone(),account_exists:environment.account_exists()?,service_snapshot:environment.services(&request.policy)?,receipt_identity:expected(&receipt_path)?,rollback:"All changed existing files are verified in backup_root/installer/<plan UUID>; restore only if current postimage still matches. New files may be removed only if installer-owned postimages match. Never remove the account, backups, Steam data or Wolf state automatically.".into()})
 }
+fn preview_writes(
+    recipes: Vec<Recipe>,
+    previous: Option<&InstallReport>,
+) -> io::Result<Vec<PlannedWrite>> {
+    let mut writes = Vec::new();
+    for r in recipes {
+        ancestor(&r.path)?;
+        let current = expected(&r.path)?;
+        if let Some(identity) = &current {
+            if identity.uid != r.uid || identity.gid != r.gid {
+                return Err(fail("existing destination ownership differs"));
+            }
+            if identity.sha256 != sha(&r.bytes)
+                && !previous.is_some_and(|p| p.installed_files.get(&r.path) == Some(identity))
+            {
+                return Err(fail("refusing an unrecognized existing destination"));
+            }
+        }
+        writes.push(PlannedWrite {
+            destination: r.path,
+            sha256: sha(&r.bytes),
+            mode: r.mode,
+            uid: r.uid,
+            gid: r.gid,
+            expected: current,
+        });
+    }
+    Ok(writes)
+}
+
+fn validate_existing_storage_authority(
+    request: &InstallRequest,
+    environment: &Environment,
+) -> io::Result<()> {
+    let existing_policy_path = environment.path(Path::new("/etc/wolf-manager/host-policy.json"));
+    let existing_policy = existing_policy_path.as_path();
+    if existing_policy.exists() {
+        trusted_path(existing_policy, 0, false)?;
+        let previous: RootPolicy = serde_json::from_slice(&read(existing_policy)?.0)?;
+        if previous.pc_id != request.policy.pc_id {
+            return Err(fail(
+                "existing PC identity cannot change during installation",
+            ));
+        }
+        let old = serde_json::to_value(&previous)?;
+        let new = serde_json::to_value(&request.policy)?;
+        for field in [
+            "steam_uid",
+            "steam_gid",
+            "libraries",
+            "steam_profiles",
+            "wolf_config",
+            "compose_file",
+            "backup_root",
+            "state_root",
+        ] {
+            if old[field] != new[field] {
+                return Err(fail(
+                    "storage authority changed; explicit guarded migration is required",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn directory(path: &Path, mode: u32) -> io::Result<()> {
     if path.exists() {
         return trusted_path(path, 0, true);
@@ -793,34 +833,34 @@ fn create_file(path: &Path, bytes: &[u8], mode: u32, uid: u32, gid: u32) -> io::
 }
 // Conservative first-release parser: no conditional policy outside our exact fragment.
 // Include paths are bounded, root-trusted and opened without following aliases.
-fn validate_ssh_policy_tree(path: &Path, include_base: &Path) -> io::Result<()> {
-    fn matches(pattern: &[u8], value: &[u8]) -> bool {
-        let mut row = vec![false; value.len() + 1];
-        row[0] = true;
-        for c in pattern {
-            let mut next = vec![false; value.len() + 1];
-            if *c == b'*' {
-                next[0] = row[0];
-            }
-            for i in 1..=value.len() {
-                next[i] = if *c == b'*' {
-                    row[i] || next[i - 1]
-                } else {
-                    row[i - 1] && (*c == b'?' || *c == value[i - 1])
-                };
-            }
-            row = next;
+fn ssh_include_matches(pattern: &[u8], value: &[u8]) -> bool {
+    let mut row = vec![false; value.len() + 1];
+    row[0] = true;
+    for c in pattern {
+        let mut next = vec![false; value.len() + 1];
+        if *c == b'*' {
+            next[0] = row[0];
         }
-        row[value.len()]
+        for i in 1..=value.len() {
+            next[i] = if *c == b'*' {
+                row[i] || next[i - 1]
+            } else {
+                row[i - 1] && (*c == b'?' || *c == value[i - 1])
+            };
+        }
+        row = next;
     }
-    fn visit(
-        path: &Path,
-        base: &Path,
-        seen: &mut std::collections::BTreeSet<PathBuf>,
-        total: &mut usize,
-        depth: usize,
-    ) -> io::Result<()> {
-        if depth > 16 || seen.len() >= 128 || !seen.insert(path.to_owned()) {
+    row[value.len()]
+}
+
+struct SshPolicyReader<'a> {
+    base: &'a Path,
+    seen: std::collections::BTreeSet<PathBuf>,
+    total: usize,
+}
+impl SshPolicyReader<'_> {
+    fn visit(&mut self, path: &Path, depth: usize) -> io::Result<()> {
+        if depth > 16 || self.seen.len() >= 128 || !self.seen.insert(path.to_owned()) {
             return Err(fail("SSH include cycle or bounds exceeded"));
         }
         trusted_path(path, 0, false)?;
@@ -833,8 +873,8 @@ fn validate_ssh_policy_tree(path: &Path, include_base: &Path) -> io::Result<()> 
         )?);
         let mut bytes = Vec::new();
         file.take(1024 * 1024 + 1).read_to_end(&mut bytes)?;
-        *total += bytes.len();
-        if *total > 1024 * 1024 {
+        self.total += bytes.len();
+        if self.total > 1024 * 1024 {
             return Err(fail("SSH configuration exceeds bounded size"));
         }
         if path == Path::new("/etc/ssh/sshd_config.d/90-wolf-manager.conf")
@@ -845,86 +885,102 @@ fn validate_ssh_policy_tree(path: &Path, include_base: &Path) -> io::Result<()> 
         let text =
             std::str::from_utf8(&bytes).map_err(|_| fail("SSH configuration is not UTF-8"))?;
         for line in text.lines() {
-            let line = line.trim_start();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
+            self.inspect_line(line, depth)?;
+        }
+        Ok(())
+    }
+
+    fn inspect_line(&mut self, line: &str, depth: usize) -> io::Result<()> {
+        let line = line.trim_start();
+        if line.is_empty() || line.starts_with('#') {
+            return Ok(());
+        }
+        let line = line.split('#').next().unwrap().trim();
+        let words = line.split_ascii_whitespace().collect::<Vec<_>>();
+        let directive = words[0].split('=').next().unwrap();
+        if directive.eq_ignore_ascii_case("Match") {
+            return Err(fail(
+                "pre-existing conditional SSH Match policy requires explicit operator review",
+            ));
+        }
+        if !directive.eq_ignore_ascii_case("Include") {
+            return Ok(());
+        }
+        if words.len() < 2 || words[0].contains('=') {
+            return Err(fail("unsupported SSH Include syntax"));
+        }
+        for token in &words[1..] {
+            self.include_token(token, depth)?;
+        }
+        Ok(())
+    }
+
+    fn include_token(&mut self, token: &str, depth: usize) -> io::Result<()> {
+        if token.bytes().any(|c| b"\\\"'[]{}".contains(&c)) {
+            return Err(fail(
+                "complex SSH Include syntax requires explicit operator review",
+            ));
+        }
+        let include = if Path::new(token).is_absolute() {
+            PathBuf::from(token)
+        } else {
+            self.base.join(token)
+        };
+        let parent = include
+            .parent()
+            .ok_or_else(|| fail("invalid SSH include"))?;
+        if parent.to_string_lossy().contains(['*', '?']) {
+            return Err(fail("SSH wildcard directories are unsupported"));
+        }
+        let name = include
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| fail("invalid SSH include name"))?;
+        if name.contains(['*', '?']) {
+            for child in selected_ssh_includes(parent, name)? {
+                self.visit(&child, depth + 1)?;
             }
-            let line = line.split('#').next().unwrap().trim();
-            let words = line.split_ascii_whitespace().collect::<Vec<_>>();
-            let directive = words[0].split('=').next().unwrap();
-            if directive.eq_ignore_ascii_case("Match") {
-                return Err(fail(
-                    "pre-existing conditional SSH Match policy requires explicit operator review",
-                ));
-            }
-            if !directive.eq_ignore_ascii_case("Include") {
-                continue;
-            }
-            if words.len() < 2 || words[0].contains('=') {
-                return Err(fail("unsupported SSH Include syntax"));
-            }
-            for token in &words[1..] {
-                if token.bytes().any(|c| b"\\\"'[]{}".contains(&c)) {
-                    return Err(fail(
-                        "complex SSH Include syntax requires explicit operator review",
-                    ));
-                }
-                let include = if Path::new(token).is_absolute() {
-                    PathBuf::from(token)
-                } else {
-                    base.join(token)
-                };
-                let parent = include
-                    .parent()
-                    .ok_or_else(|| fail("invalid SSH include"))?;
-                if parent.to_string_lossy().contains(['*', '?']) {
-                    return Err(fail("SSH wildcard directories are unsupported"));
-                }
-                let name = include
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .ok_or_else(|| fail("invalid SSH include name"))?;
-                if name.contains(['*', '?']) {
-                    if !parent.exists() {
-                        continue;
-                    }
-                    trusted_path(parent, 0, true)?;
-                    let mut selected = Vec::new();
-                    for (index, entry) in fs::read_dir(parent)?.enumerate() {
-                        if index >= 1024 {
-                            return Err(fail("SSH include directory exceeds bounds"));
-                        }
-                        let entry = entry?;
-                        let file_name = entry.file_name();
-                        let file_name = file_name
-                            .to_str()
-                            .ok_or_else(|| fail("non-UTF8 SSH include filename"))?;
-                        if matches(name.as_bytes(), file_name.as_bytes()) {
-                            selected.push(entry.path());
-                        }
-                    }
-                    selected.sort();
-                    for child in selected {
-                        visit(&child, base, seen, total, depth + 1)?;
-                    }
-                } else {
-                    match fs::symlink_metadata(&include) {
-                        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-                        Err(e) => return Err(e),
-                        Ok(_) => visit(&include, base, seen, total, depth + 1)?,
-                    }
-                }
+        } else {
+            match fs::symlink_metadata(&include) {
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e),
+                Ok(_) => self.visit(&include, depth + 1)?,
             }
         }
         Ok(())
     }
-    visit(
-        path,
-        include_base,
-        &mut std::collections::BTreeSet::new(),
-        &mut 0,
-        0,
-    )
+}
+
+fn selected_ssh_includes(parent: &Path, name: &str) -> io::Result<Vec<PathBuf>> {
+    if !parent.exists() {
+        return Ok(Vec::new());
+    }
+    trusted_path(parent, 0, true)?;
+    let mut selected = Vec::new();
+    for (index, entry) in fs::read_dir(parent)?.enumerate() {
+        if index >= 1024 {
+            return Err(fail("SSH include directory exceeds bounds"));
+        }
+        let entry = entry?;
+        let file_name = entry.file_name();
+        let file_name = file_name
+            .to_str()
+            .ok_or_else(|| fail("non-UTF8 SSH include filename"))?;
+        if ssh_include_matches(name.as_bytes(), file_name.as_bytes()) {
+            selected.push(entry.path());
+        }
+    }
+    selected.sort();
+    Ok(selected)
+}
+
+fn validate_ssh_policy_tree(path: &Path, include_base: &Path) -> io::Result<()> {
+    SshPolicyReader {
+        base: include_base,
+        seen: std::collections::BTreeSet::new(),
+        total: 0,
+    }
+    .visit(path, 0)
 }
 fn bounded_client_environment(environment: &[&str]) -> bool {
     // OpenSSH accumulates repeated AcceptEnv directives, including when the
@@ -1056,19 +1112,7 @@ fn apply_with(plan: &InstallPlan, environment: &Environment) -> io::Result<Insta
         None
     };
     let refreshed = preflight_with(&request, environment)?;
-    if refreshed.proposed_writes != plan.proposed_writes
-        || refreshed.proposed_directories != plan.proposed_directories
-        || refreshed.service_snapshot != plan.service_snapshot
-        || refreshed.source_identity != plan.source_identity
-        || refreshed.broker_identity != plan.broker_identity
-        || refreshed.storage_mapping != plan.storage_mapping
-        || refreshed.receipt_identity != plan.receipt_identity
-        || refreshed.account_exists != plan.account_exists
-    {
-        return Err(fail(
-            "installer inputs changed since preview; no writes permitted",
-        ));
-    }
+    validate_refreshed_plan(plan, &refreshed)?;
     for directory in &plan.proposed_directories {
         create_planned_directory(directory)?;
     }
@@ -1105,35 +1149,10 @@ fn apply_with(plan: &InstallPlan, environment: &Environment) -> io::Result<Insta
             recipe.path = environment.path(&recipe.path);
         }
     }
-    if recipes.len() != plan.proposed_writes.len()
-        || recipes.iter().zip(&plan.proposed_writes).any(|(r, w)| {
-            r.path != w.destination
-                || sha(&r.bytes) != w.sha256
-                || r.mode != w.mode
-                || r.uid != w.uid
-                || r.gid != w.gid
-        })
-    {
-        return Err(fail("recipe changed before effects"));
-    }
+    validate_recipe_consistency(plan, &recipes)?;
     environment.validate_configs(&folder, &recipes)?;
 
-    for (index, write) in plan.proposed_writes.iter().enumerate() {
-        if expected(&write.destination)? != write.expected {
-            return Err(fail("destination drift before backup"));
-        }
-        if let Some(identity) = &write.expected {
-            let (bytes, now) = read(&write.destination)?;
-            if &now != identity {
-                return Err(fail("destination changed during backup"));
-            }
-            let backup = folder.join(format!("preimage-{index}"));
-            create_file(&backup, &bytes, 0o600, 0, 0)?;
-            if read(&backup)?.1.sha256 != identity.sha256 {
-                return Err(fail("backup verification failed"));
-            }
-        }
-    }
+    backup_installation_files(plan, &folder)?;
     create_file(
         &folder.join("plan.json"),
         &serde_json::to_vec_pretty(plan)?,
@@ -1141,101 +1160,13 @@ fn apply_with(plan: &InstallPlan, environment: &Environment) -> io::Result<Insta
         0,
         0,
     )?;
-    // Account creation is deliberately last among prerequisites, before policy installation.
-    if !plan.account_exists && !environment.fixture() {
-        let useradd = ["/usr/sbin/useradd", "/usr/bin/useradd"]
-            .into_iter()
-            .find(|p| Path::new(p).exists())
-            .ok_or_else(|| fail("useradd prerequisite is absent"))?;
-        if !Command::new(useradd)
-            .args([
-                "--system",
-                "--user-group",
-                "--no-create-home",
-                "--home-dir",
-                "/nonexistent",
-                "--shell",
-                "/bin/sh",
-                "--password",
-                "!",
-                "wolf-manager",
-            ])
-            .env_clear()
-            .status()?
-            .success()
-        {
-            return Err(fail("restricted account creation failed"));
-        }
-        if !account_exists()? {
-            return Err(fail("new account does not satisfy restricted policy"));
-        }
-    }
+    create_restricted_account(plan, environment)?;
     let mut changed = Vec::new();
     for (r, write) in recipes.iter().zip(&plan.proposed_writes) {
         environment.before_write(changed.len())?;
-        if write
-            .expected
-            .as_ref()
-            .is_some_and(|i| i.sha256 == write.sha256 && i.mode == write.mode)
-        {
-            continue;
+        if apply_recipe(plan, r, write)? {
+            changed.push(r.path.clone());
         }
-        if expected(&r.path)? != write.expected {
-            return Err(fail(
-                "destination drift; verified backups retained for guarded rollback",
-            ));
-        }
-        directory(r.path.parent().unwrap(), 0o755)?;
-        let stage = r
-            .path
-            .parent()
-            .unwrap()
-            .join(format!(".wolf-manager-{}.new", Uuid::new_v4()));
-        create_file(&stage, &r.bytes, r.mode, r.uid, r.gid)?;
-        // Preserve the existing inode until successful verification; never overwrite a racing writer.
-        if let Some(identity) = &write.expected {
-            let old = r
-                .path
-                .parent()
-                .unwrap()
-                .join(format!(".wolf-manager-{}.previous", plan.id));
-            rustix::fs::renameat_with(
-                rustix::fs::CWD,
-                &r.path,
-                rustix::fs::CWD,
-                &old,
-                rustix::fs::RenameFlags::NOREPLACE,
-            )?;
-            if read(&old)?.1 != *identity {
-                let _ = rustix::fs::renameat_with(
-                    rustix::fs::CWD,
-                    &old,
-                    rustix::fs::CWD,
-                    &r.path,
-                    rustix::fs::RenameFlags::NOREPLACE,
-                );
-                return Err(fail("replacement raced; displaced original retained"));
-            }
-        }
-        rustix::fs::renameat_with(
-            rustix::fs::CWD,
-            &stage,
-            rustix::fs::CWD,
-            &r.path,
-            rustix::fs::RenameFlags::NOREPLACE,
-        )?;
-        File::open(r.path.parent().unwrap())?.sync_all()?;
-        let (_, installed) = read(&r.path)?;
-        if installed.sha256 != write.sha256
-            || installed.mode != write.mode
-            || installed.uid != write.uid
-            || installed.gid != write.gid
-        {
-            return Err(fail(
-                "installed postimage verification failed; backups retained",
-            ));
-        }
-        changed.push(r.path.clone());
     }
     let report = InstallReport {
         version: 1,
@@ -1257,6 +1188,48 @@ fn apply_with(plan: &InstallPlan, environment: &Environment) -> io::Result<Insta
         0,
         0,
     )?;
+    store_install_receipt(plan, &report, &folder)?;
+    // No automatic service start/restart: operator reviews the verified plan before cutover.
+    Ok(report)
+}
+
+fn validate_recipe_consistency(plan: &InstallPlan, recipes: &[Recipe]) -> io::Result<()> {
+    if recipes.len() != plan.proposed_writes.len()
+        || recipes.iter().zip(&plan.proposed_writes).any(|(r, w)| {
+            r.path != w.destination
+                || sha(&r.bytes) != w.sha256
+                || r.mode != w.mode
+                || r.uid != w.uid
+                || r.gid != w.gid
+        })
+    {
+        return Err(fail("recipe changed before effects"));
+    }
+    Ok(())
+}
+
+fn validate_refreshed_plan(plan: &InstallPlan, refreshed: &InstallPlan) -> io::Result<()> {
+    if refreshed.proposed_writes != plan.proposed_writes
+        || refreshed.proposed_directories != plan.proposed_directories
+        || refreshed.service_snapshot != plan.service_snapshot
+        || refreshed.source_identity != plan.source_identity
+        || refreshed.broker_identity != plan.broker_identity
+        || refreshed.storage_mapping != plan.storage_mapping
+        || refreshed.receipt_identity != plan.receipt_identity
+        || refreshed.account_exists != plan.account_exists
+    {
+        return Err(fail(
+            "installer inputs changed since preview; no writes permitted",
+        ));
+    }
+    Ok(())
+}
+
+fn store_install_receipt(
+    plan: &InstallPlan,
+    report: &InstallReport,
+    folder: &Path,
+) -> io::Result<()> {
     let receipt = plan.policy.state_root.join("installation.json");
     let previous = expected(&receipt)?;
     if let Some(identity) = &previous {
@@ -1295,8 +1268,126 @@ fn apply_with(plan: &InstallPlan, environment: &Environment) -> io::Result<Insta
         rustix::fs::RenameFlags::NOREPLACE,
     )?;
     File::open(&plan.policy.state_root)?.sync_all()?;
-    // No automatic service start/restart: operator reviews the verified plan before cutover.
-    Ok(report)
+    Ok(())
+}
+
+fn apply_recipe(plan: &InstallPlan, r: &Recipe, write: &PlannedWrite) -> io::Result<bool> {
+    if write
+        .expected
+        .as_ref()
+        .is_some_and(|i| i.sha256 == write.sha256 && i.mode == write.mode)
+    {
+        return Ok(false);
+    }
+    if expected(&r.path)? != write.expected {
+        return Err(fail(
+            "destination drift; verified backups retained for guarded rollback",
+        ));
+    }
+    directory(r.path.parent().unwrap(), 0o755)?;
+    let stage = r
+        .path
+        .parent()
+        .unwrap()
+        .join(format!(".wolf-manager-{}.new", Uuid::new_v4()));
+    create_file(&stage, &r.bytes, r.mode, r.uid, r.gid)?;
+    // Preserve the existing inode until successful verification; never overwrite a racing writer.
+    if let Some(identity) = &write.expected {
+        let old = r
+            .path
+            .parent()
+            .unwrap()
+            .join(format!(".wolf-manager-{}.previous", plan.id));
+        rustix::fs::renameat_with(
+            rustix::fs::CWD,
+            &r.path,
+            rustix::fs::CWD,
+            &old,
+            rustix::fs::RenameFlags::NOREPLACE,
+        )?;
+        if read(&old)?.1 != *identity {
+            let _ = rustix::fs::renameat_with(
+                rustix::fs::CWD,
+                &old,
+                rustix::fs::CWD,
+                &r.path,
+                rustix::fs::RenameFlags::NOREPLACE,
+            );
+            return Err(fail("replacement raced; displaced original retained"));
+        }
+    }
+    rustix::fs::renameat_with(
+        rustix::fs::CWD,
+        &stage,
+        rustix::fs::CWD,
+        &r.path,
+        rustix::fs::RenameFlags::NOREPLACE,
+    )?;
+    File::open(r.path.parent().unwrap())?.sync_all()?;
+    let (_, installed) = read(&r.path)?;
+    if installed.sha256 != write.sha256
+        || installed.mode != write.mode
+        || installed.uid != write.uid
+        || installed.gid != write.gid
+    {
+        return Err(fail(
+            "installed postimage verification failed; backups retained",
+        ));
+    }
+    Ok(true)
+}
+
+fn backup_installation_files(plan: &InstallPlan, folder: &Path) -> io::Result<()> {
+    for (index, write) in plan.proposed_writes.iter().enumerate() {
+        if expected(&write.destination)? != write.expected {
+            return Err(fail("destination drift before backup"));
+        }
+        if let Some(identity) = &write.expected {
+            let (bytes, now) = read(&write.destination)?;
+            if &now != identity {
+                return Err(fail("destination changed during backup"));
+            }
+            let backup = folder.join(format!("preimage-{index}"));
+            create_file(&backup, &bytes, 0o600, 0, 0)?;
+            if read(&backup)?.1.sha256 != identity.sha256 {
+                return Err(fail("backup verification failed"));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn create_restricted_account(plan: &InstallPlan, environment: &Environment) -> io::Result<()> {
+    // Account creation is deliberately last among prerequisites, before policy installation.
+    if !plan.account_exists && !environment.fixture() {
+        let useradd = ["/usr/sbin/useradd", "/usr/bin/useradd"]
+            .into_iter()
+            .find(|p| Path::new(p).exists())
+            .ok_or_else(|| fail("useradd prerequisite is absent"))?;
+        if !Command::new(useradd)
+            .args([
+                "--system",
+                "--user-group",
+                "--no-create-home",
+                "--home-dir",
+                "/nonexistent",
+                "--shell",
+                "/bin/sh",
+                "--password",
+                "!",
+                "wolf-manager",
+            ])
+            .env_clear()
+            .status()?
+            .success()
+        {
+            return Err(fail("restricted account creation failed"));
+        }
+        if !account_exists()? {
+            return Err(fail("new account does not satisfy restricted policy"));
+        }
+    }
+    Ok(())
 }
 
 // Root-only disposable filesystem fixtures are added with the guarded core below.
@@ -1441,12 +1532,7 @@ impl Environment {
         if plan.service_snapshot.ssh.active {
             checked_systemctl(&["try-reload-or-restart", &plan.service_snapshot.ssh_unit])?;
         }
-        if options.enable_on_boot {
-            checked_systemctl(&["enable", &plan.policy.service_unit])?;
-            if plan.policy.broker_secret_file.is_some() {
-                checked_systemctl(&["enable", "wolf-manager-catalog.service"])?;
-            }
-        }
+        enable_requested_services(plan, options)?;
         if options.start_catalog {
             checked_systemctl(&["start", "wolf-manager-catalog.service"])?;
         }
@@ -1456,6 +1542,16 @@ impl Environment {
         Ok(())
     }
 }
+fn enable_requested_services(plan: &InstallPlan, options: &ActivationOptions) -> io::Result<()> {
+    if options.enable_on_boot {
+        checked_systemctl(&["enable", &plan.policy.service_unit])?;
+        if plan.policy.broker_secret_file.is_some() {
+            checked_systemctl(&["enable", "wolf-manager-catalog.service"])?;
+        }
+    }
+    Ok(())
+}
+
 fn directory_identity(path: &Path) -> io::Result<DirectoryIdentity> {
     let m = fs::symlink_metadata(path)?;
     if !m.is_dir() || m.file_type().is_symlink() || m.mode() & 0o022 != 0 {
@@ -1507,39 +1603,43 @@ fn planned_directories(
                 .ok_or_else(|| fail("missing grant ancestor"))?;
         }
     }
-    let mut dirs = Vec::new();
-    for (path, (uid, gid, mode)) in desired {
-        let expected = if path.exists() {
-            Some(directory_identity(&path)?)
-        } else {
-            None
-        };
-        if expected
-            .as_ref()
-            .is_some_and(|i| i.uid != uid || i.gid != gid || (mode == 0o700 && i.mode & 0o077 != 0))
-        {
-            return Err(fail("existing store ownership or privacy mismatch"));
-        }
-        let mut anchor = path.parent().unwrap();
-        while !anchor.exists() {
-            anchor = anchor.parent().ok_or_else(|| fail("missing anchor"))?;
-        }
-        trusted_path(anchor, uid, true)?;
-        let anchor_identity = directory_identity(anchor)?;
-        let anchor = anchor.to_owned();
-        dirs.push(PlannedDirectory {
-            path,
-            uid,
-            gid,
-            mode,
-            expected,
-            anchor,
-            anchor_identity,
-        });
-    }
+    let mut dirs = desired
+        .into_iter()
+        .map(|(path, (uid, gid, mode))| planned_directory(path, uid, gid, mode))
+        .collect::<io::Result<Vec<_>>>()?;
     dirs.sort_by_key(|d| d.path.components().count());
     Ok(dirs)
 }
+fn planned_directory(path: PathBuf, uid: u32, gid: u32, mode: u32) -> io::Result<PlannedDirectory> {
+    let expected = if path.exists() {
+        Some(directory_identity(&path)?)
+    } else {
+        None
+    };
+    if expected
+        .as_ref()
+        .is_some_and(|i| i.uid != uid || i.gid != gid || (mode == 0o700 && i.mode & 0o077 != 0))
+    {
+        return Err(fail("existing store ownership or privacy mismatch"));
+    }
+    let mut anchor = path.parent().unwrap();
+    while !anchor.exists() {
+        anchor = anchor.parent().ok_or_else(|| fail("missing anchor"))?;
+    }
+    trusted_path(anchor, uid, true)?;
+    let anchor_identity = directory_identity(anchor)?;
+    let anchor = anchor.to_owned();
+    Ok(PlannedDirectory {
+        path,
+        uid,
+        gid,
+        mode,
+        expected,
+        anchor,
+        anchor_identity,
+    })
+}
+
 fn create_planned_directory(directory: &PlannedDirectory) -> io::Result<()> {
     if directory_identity(&directory.anchor)? != directory.anchor_identity {
         return Err(fail("directory anchor changed"));
@@ -1848,6 +1948,207 @@ fn rollback_with(plan: &InstallPlan, environment: &Environment) -> io::Result<In
     if !receipt_is_new && receipt_current != plan.receipt_identity {
         return Err(fail("another install or receipt drift blocks rollback"));
     }
+    let RollbackAdmission { work, retained } = collect_rollback_work(plan, &folder)?;
+    if receipt_is_new && let Some(identity) = &plan.receipt_identity {
+        let backup = read(&folder.join("receipt-preimage"))?.1;
+        if backup.sha256 != identity.sha256 {
+            return Err(fail("previous installation receipt backup is corrupt"));
+        }
+    }
+    environment.prepare_rollback(plan, &folder)?;
+    let mut changed = Vec::new();
+    for RollbackWrite {
+        index,
+        write,
+        current,
+    } in work
+    {
+        restore_rollback_write(plan, &folder, index, write, &current)?;
+        changed.push(write.destination.clone());
+        File::open(write.destination.parent().unwrap())?.sync_all()?;
+    }
+    if receipt_is_new {
+        restore_previous_receipt(plan, &folder, &receipt, &receipt_current)?;
+    }
+    environment.finish_rollback(plan, &folder)?;
+    let report=InstallReport{version:1,id:plan.id,changed_files:changed,installed_files:plan.proposed_writes.iter().filter_map(|w|expected(&w.destination).transpose().map(|result|result.map(|i|(w.destination.clone(),i)))).collect::<io::Result<_>>()?,verified_backup_directory:folder.clone(),activation_required:false,retained_files:retained,recovery_instructions:"Original verified metadata restored. Created Wolf configuration/Compose, broker secrets, directories, account and every backup remain preserved; review retained_files before another install. No Steam data removed.".into()};
+    create_file(
+        &folder.join(format!("rollback-report-{}.json", Uuid::new_v4())),
+        &serde_json::to_vec_pretty(&report)?,
+        0o600,
+        0,
+        0,
+    )?;
+    Ok(report)
+}
+
+fn restore_previous_receipt(
+    plan: &InstallPlan,
+    folder: &Path,
+    receipt: &Path,
+    receipt_current: &Option<FileIdentity>,
+) -> io::Result<()> {
+    let preserved = plan.policy.state_root.join(format!(
+        ".installation-rollback-{}.postimage",
+        Uuid::new_v4()
+    ));
+    if expected(receipt)?.as_ref() != receipt_current.as_ref() {
+        return Err(fail("receipt changed during rollback"));
+    }
+    rustix::fs::renameat_with(
+        rustix::fs::CWD,
+        receipt,
+        rustix::fs::CWD,
+        &preserved,
+        rustix::fs::RenameFlags::NOREPLACE,
+    )?;
+    if let Some(identity) = &plan.receipt_identity {
+        let displaced = plan
+            .policy
+            .state_root
+            .join(format!(".installation-{}.previous", plan.id));
+        if expected(&displaced)?.as_ref() == Some(identity) {
+            rustix::fs::renameat_with(
+                rustix::fs::CWD,
+                &displaced,
+                rustix::fs::CWD,
+                receipt,
+                rustix::fs::RenameFlags::NOREPLACE,
+            )?;
+        } else {
+            create_file(
+                receipt,
+                &read(&folder.join("receipt-preimage"))?.0,
+                identity.mode,
+                identity.uid,
+                identity.gid,
+            )?;
+        }
+    }
+    File::open(&plan.policy.state_root)?.sync_all()?;
+    Ok(())
+}
+
+fn restore_rollback_write(
+    plan: &InstallPlan,
+    folder: &Path,
+    index: usize,
+    write: &PlannedWrite,
+    current: &Option<FileIdentity>,
+) -> io::Result<()> {
+    if expected(&write.destination)?.as_ref() != current.as_ref() {
+        return Err(fail("rollback destination changed after preview"));
+    }
+    let parent = write.destination.parent().unwrap();
+    trusted_path(parent, 0, true)?;
+    if current.is_some() {
+        let preserved = parent.join(format!(
+            ".wolf-manager-rollback-{}-{index}.postimage",
+            Uuid::new_v4()
+        ));
+        rustix::fs::renameat_with(
+            rustix::fs::CWD,
+            &write.destination,
+            rustix::fs::CWD,
+            &preserved,
+            rustix::fs::RenameFlags::NOREPLACE,
+        )?;
+        if expected(&preserved)?.as_ref() != current.as_ref() {
+            let _ = rustix::fs::renameat_with(
+                rustix::fs::CWD,
+                &preserved,
+                rustix::fs::CWD,
+                &write.destination,
+                rustix::fs::RenameFlags::NOREPLACE,
+            );
+            return Err(fail("rollback raced with another writer; bytes retained"));
+        }
+        File::open(parent)?.sync_all()?;
+    }
+    if let Some(original) = &write.expected {
+        let displaced = parent.join(format!(".wolf-manager-{}.previous", plan.id));
+        if expected(&displaced)?.as_ref() == Some(original) {
+            rustix::fs::renameat_with(
+                rustix::fs::CWD,
+                &displaced,
+                rustix::fs::CWD,
+                &write.destination,
+                rustix::fs::RenameFlags::NOREPLACE,
+            )?;
+        } else {
+            let bytes = read(&folder.join(format!("preimage-{index}")))?.0;
+            create_file(
+                &write.destination,
+                &bytes,
+                original.mode,
+                original.uid,
+                original.gid,
+            )?;
+        }
+        if !matches_identity(&read(&write.destination)?.1, original) {
+            return Err(fail("restored preimage verification failed"));
+        }
+    }
+    Ok(())
+}
+
+fn rollback_write_needed(
+    plan: &InstallPlan,
+    folder: &Path,
+    index: usize,
+    write: &PlannedWrite,
+    current: &Option<FileIdentity>,
+) -> io::Result<bool> {
+    if let Some(identity) = &write.expected {
+        let (_, backup) = read(&folder.join(format!("preimage-{index}")))?;
+        if backup.sha256 != identity.sha256 || backup.uid != 0 || backup.mode != 0o600 {
+            return Err(fail("rollback backup is corrupt or untrusted"));
+        }
+        if current
+            .as_ref()
+            .is_some_and(|now| matches_identity(now, identity))
+        {
+            return Ok(false);
+        }
+    } else if current.is_none() {
+        return Ok(false);
+    }
+    if current.as_ref().is_some_and(|now| {
+        now.sha256 != write.sha256
+            || now.uid != write.uid
+            || now.gid != write.gid
+            || now.mode != write.mode
+    }) {
+        return Err(fail("postimage drift blocks all rollback effects"));
+    }
+    if current.is_none() && write.expected.is_some() {
+        let displaced = write
+            .destination
+            .parent()
+            .unwrap()
+            .join(format!(".wolf-manager-{}.previous", plan.id));
+        if expected(&displaced)?.as_ref() != write.expected.as_ref() {
+            return Err(fail(
+                "missing destination is not a verified interrupted replacement",
+            ));
+        }
+    }
+    Ok(true)
+}
+
+struct RollbackWrite<'a> {
+    index: usize,
+    write: &'a PlannedWrite,
+    current: Option<FileIdentity>,
+}
+struct RollbackAdmission<'a> {
+    work: Vec<RollbackWrite<'a>>,
+    retained: Vec<PathBuf>,
+}
+fn collect_rollback_work<'a>(
+    plan: &'a InstallPlan,
+    folder: &Path,
+) -> io::Result<RollbackAdmission<'a>> {
     let mut work = Vec::new();
     let mut retained = Vec::new();
     for (index, write) in plan.proposed_writes.iter().enumerate() {
@@ -1863,157 +2164,16 @@ fn rollback_with(plan: &InstallPlan, environment: &Environment) -> io::Result<In
             continue;
         }
         let current = expected(&write.destination)?;
-        if let Some(identity) = &write.expected {
-            let (_, backup) = read(&folder.join(format!("preimage-{index}")))?;
-            if backup.sha256 != identity.sha256 || backup.uid != 0 || backup.mode != 0o600 {
-                return Err(fail("rollback backup is corrupt or untrusted"));
-            }
-            if current
-                .as_ref()
-                .is_some_and(|now| matches_identity(now, identity))
-            {
-                continue;
-            }
-        } else if current.is_none() {
+        if !rollback_write_needed(plan, folder, index, write, &current)? {
             continue;
         }
-        if current.as_ref().is_some_and(|now| {
-            now.sha256 != write.sha256
-                || now.uid != write.uid
-                || now.gid != write.gid
-                || now.mode != write.mode
-        }) {
-            return Err(fail("postimage drift blocks all rollback effects"));
-        }
-        if current.is_none() && write.expected.is_some() {
-            let displaced = write
-                .destination
-                .parent()
-                .unwrap()
-                .join(format!(".wolf-manager-{}.previous", plan.id));
-            if expected(&displaced)?.as_ref() != write.expected.as_ref() {
-                return Err(fail(
-                    "missing destination is not a verified interrupted replacement",
-                ));
-            }
-        }
-        work.push((index, write, current));
+        work.push(RollbackWrite {
+            index,
+            write,
+            current,
+        });
     }
-    if receipt_is_new && let Some(identity) = &plan.receipt_identity {
-        let backup = read(&folder.join("receipt-preimage"))?.1;
-        if backup.sha256 != identity.sha256 {
-            return Err(fail("previous installation receipt backup is corrupt"));
-        }
-    }
-    environment.prepare_rollback(plan, &folder)?;
-    let mut changed = Vec::new();
-    for (index, write, current) in work {
-        if expected(&write.destination)? != current {
-            return Err(fail("rollback destination changed after preview"));
-        }
-        let parent = write.destination.parent().unwrap();
-        trusted_path(parent, 0, true)?;
-        if current.is_some() {
-            let preserved = parent.join(format!(
-                ".wolf-manager-rollback-{}-{index}.postimage",
-                Uuid::new_v4()
-            ));
-            rustix::fs::renameat_with(
-                rustix::fs::CWD,
-                &write.destination,
-                rustix::fs::CWD,
-                &preserved,
-                rustix::fs::RenameFlags::NOREPLACE,
-            )?;
-            if expected(&preserved)? != current {
-                let _ = rustix::fs::renameat_with(
-                    rustix::fs::CWD,
-                    &preserved,
-                    rustix::fs::CWD,
-                    &write.destination,
-                    rustix::fs::RenameFlags::NOREPLACE,
-                );
-                return Err(fail("rollback raced with another writer; bytes retained"));
-            }
-            File::open(parent)?.sync_all()?;
-        }
-        if let Some(original) = &write.expected {
-            let displaced = parent.join(format!(".wolf-manager-{}.previous", plan.id));
-            if expected(&displaced)?.as_ref() == Some(original) {
-                rustix::fs::renameat_with(
-                    rustix::fs::CWD,
-                    &displaced,
-                    rustix::fs::CWD,
-                    &write.destination,
-                    rustix::fs::RenameFlags::NOREPLACE,
-                )?;
-            } else {
-                let bytes = read(&folder.join(format!("preimage-{index}")))?.0;
-                create_file(
-                    &write.destination,
-                    &bytes,
-                    original.mode,
-                    original.uid,
-                    original.gid,
-                )?;
-            }
-            if !matches_identity(&read(&write.destination)?.1, original) {
-                return Err(fail("restored preimage verification failed"));
-            }
-        }
-        changed.push(write.destination.clone());
-        File::open(parent)?.sync_all()?;
-    }
-    if receipt_is_new {
-        let preserved = plan.policy.state_root.join(format!(
-            ".installation-rollback-{}.postimage",
-            Uuid::new_v4()
-        ));
-        if expected(&receipt)? != receipt_current {
-            return Err(fail("receipt changed during rollback"));
-        }
-        rustix::fs::renameat_with(
-            rustix::fs::CWD,
-            &receipt,
-            rustix::fs::CWD,
-            &preserved,
-            rustix::fs::RenameFlags::NOREPLACE,
-        )?;
-        if let Some(identity) = &plan.receipt_identity {
-            let displaced = plan
-                .policy
-                .state_root
-                .join(format!(".installation-{}.previous", plan.id));
-            if expected(&displaced)?.as_ref() == Some(identity) {
-                rustix::fs::renameat_with(
-                    rustix::fs::CWD,
-                    &displaced,
-                    rustix::fs::CWD,
-                    &receipt,
-                    rustix::fs::RenameFlags::NOREPLACE,
-                )?;
-            } else {
-                create_file(
-                    &receipt,
-                    &read(&folder.join("receipt-preimage"))?.0,
-                    identity.mode,
-                    identity.uid,
-                    identity.gid,
-                )?;
-            }
-        }
-        File::open(&plan.policy.state_root)?.sync_all()?;
-    }
-    environment.finish_rollback(plan, &folder)?;
-    let report=InstallReport{version:1,id:plan.id,changed_files:changed,installed_files:plan.proposed_writes.iter().filter_map(|w|expected(&w.destination).transpose().map(|result|result.map(|i|(w.destination.clone(),i)))).collect::<io::Result<_>>()?,verified_backup_directory:folder.clone(),activation_required:false,retained_files:retained,recovery_instructions:"Original verified metadata restored. Created Wolf configuration/Compose, broker secrets, directories, account and every backup remain preserved; review retained_files before another install. No Steam data removed.".into()};
-    create_file(
-        &folder.join(format!("rollback-report-{}.json", Uuid::new_v4())),
-        &serde_json::to_vec_pretty(&report)?,
-        0o600,
-        0,
-        0,
-    )?;
-    Ok(report)
+    Ok(RollbackAdmission { work, retained })
 }
 
 #[cfg(test)]
@@ -2244,6 +2404,549 @@ mod root_fixture_tests {
         );
         assert!(record.exists());
     }
+    fn replace_native_validation_candidate(
+        candidates: &mut [Recipe],
+        config: &Path,
+        managed: &Path,
+        inherited: &str,
+        kind: &str,
+        value: &str,
+    ) {
+        if kind == "sshd" {
+            // Remove the installed include so the candidate policy is the effective authority.
+            fs::write(
+                config,
+                format!("{inherited}HostKey /etc/ssh/ssh_host_ed25519_key\n"),
+            )
+            .unwrap();
+            let recipe = candidates.iter_mut().find(|r| r.path == managed).unwrap();
+            let text = String::from_utf8(recipe.bytes.clone()).unwrap();
+            recipe.bytes = if value.starts_with("ForceCommand") {
+                text.replace(
+                    "ForceCommand /usr/libexec/wolf-manager/ssh-dispatcher",
+                    value,
+                )
+                .into_bytes()
+            } else if value.starts_with("AcceptEnv") {
+                text.replace("AcceptEnv WOLF_MANAGER_UNUSED_ENV", value)
+                    .into_bytes()
+            } else {
+                format!("{text}\n{value}\n").into_bytes()
+            };
+        } else {
+            candidates
+                .iter_mut()
+                .find(|r| r.path == Path::new("/etc/sudoers.d/wolf-manager"))
+                .unwrap()
+                .bytes = value.as_bytes().to_vec();
+        }
+    }
+
+    #[test]
+    #[ignore = "requires dedicated disposable root container and WOLF_TEST_NATIVE_VALIDATORS=1"]
+    fn native_validators_accept_repeated_restricted_policy_and_refuse_privilege_drift() {
+        assert_eq!(rustix::process::geteuid().as_raw(), 0);
+        assert_eq!(
+            std::env::var("WOLF_TEST_NATIVE_VALIDATORS").as_deref(),
+            Ok("1")
+        );
+        assert_eq!(
+            fs::read("/run/wolf-native-validator-fixture").unwrap(),
+            b"disposable-container"
+        );
+        struct Restore(Vec<(PathBuf, Option<Vec<u8>>, Option<u32>)>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                for (path, bytes, mode) in &self.0 {
+                    if let Some(bytes) = bytes {
+                        fs::write(path, bytes).unwrap();
+                        fs::set_permissions(path, fs::Permissions::from_mode(mode.unwrap()))
+                            .unwrap();
+                    } else if path.exists() {
+                        fs::remove_file(path).unwrap();
+                    }
+                }
+            }
+        }
+        let config = Path::new("/etc/ssh/sshd_config");
+        let managed = Path::new("/etc/ssh/sshd_config.d/90-wolf-manager.conf");
+        let _restore = Restore(
+            [config, managed]
+                .into_iter()
+                .map(|path| {
+                    (
+                        path.to_owned(),
+                        fs::read(path).ok(),
+                        fs::metadata(path).ok().map(|m| m.mode() & 0o777),
+                    )
+                })
+                .collect(),
+        );
+        let fixture = RootFixture::new();
+        let base = "HostKey /etc/ssh/ssh_host_ed25519_key\nInclude /etc/ssh/sshd_config.d/90-wolf-manager.conf\n";
+        fs::write(
+            managed,
+            include_bytes!("../../../installer/templates/90-wolf-manager.conf"),
+        )
+        .unwrap();
+        let original_wolf =
+            fs::read(fixture.request.policy.wolf_config.root.join("config.toml")).unwrap();
+        for (index, inherited, replacement, expected_error) in [
+            (0, "", None, None),
+            (1, "AcceptEnv WOLF_MANAGER_UNUSED_ENV\n", None, None),
+            (
+                2,
+                "",
+                Some(("sshd", "AcceptEnv LD_PRELOAD")),
+                Some("inherited client environment policy is not bounded"),
+            ),
+            (
+                3,
+                "SetEnv LD_PRELOAD=/unsafe\n",
+                None,
+                Some("inherited server environment policy is not bounded"),
+            ),
+            (
+                4,
+                "",
+                Some(("sshd", "ForceCommand /bin/sh")),
+                Some("effective SSH account policy differs from restricted contract"),
+            ),
+            (
+                5,
+                "",
+                Some(("sshd", "UnknownDirective invalid")),
+                Some("sshd validation failed before activation"),
+            ),
+            (
+                6,
+                "",
+                Some(("sudo", "this is not valid sudoers !!")),
+                Some("sudoers validation failed before activation"),
+            ),
+        ] {
+            fs::write(config, format!("{inherited}{base}")).unwrap();
+            let config_before = fs::read(config).unwrap();
+            let managed_before = fs::read(managed).unwrap();
+            let mut candidates = recipes(&fixture.request).unwrap();
+            if let Some((kind, value)) = replacement {
+                replace_native_validation_candidate(
+                    &mut candidates,
+                    config,
+                    managed,
+                    inherited,
+                    kind,
+                    value,
+                );
+            }
+            let config_under_test = fs::read(config).unwrap();
+            let folder = fixture.directory.path().join(format!("native-{index}"));
+            fs::create_dir(&folder).unwrap();
+            let result = validate_configs(&folder, &candidates);
+            if let Some(expected) = expected_error {
+                assert_eq!(result.unwrap_err().to_string(), expected);
+            } else {
+                result.unwrap();
+                assert_eq!(config_under_test, config_before);
+            }
+            assert_eq!(fs::read(config).unwrap(), config_under_test);
+            assert_eq!(fs::read(managed).unwrap(), managed_before);
+            assert_eq!(
+                fs::read(fixture.request.policy.wolf_config.root.join("config.toml")).unwrap(),
+                original_wolf
+            );
+            assert!(!fixture.request.policy.state_root.exists());
+        }
+    }
+
+    #[test]
+    #[ignore = "requires dedicated disposable root container and WOLF_TEST_NATIVE_VALIDATORS=1"]
+    fn native_account_admission_refuses_privileged_or_unlocked_existing_accounts() {
+        assert_eq!(rustix::process::geteuid().as_raw(), 0);
+        assert_eq!(
+            std::env::var("WOLF_TEST_NATIVE_VALIDATORS").as_deref(),
+            Ok("1")
+        );
+        assert_eq!(
+            fs::read("/run/wolf-native-validator-fixture").unwrap(),
+            b"disposable-container"
+        );
+        assert!(
+            !Path::new("/nonexistent").exists(),
+            "fixture requires absent managed home"
+        );
+        struct RestoreDatabases(Vec<(PathBuf, Vec<u8>)>);
+        impl Drop for RestoreDatabases {
+            fn drop(&mut self) {
+                for (path, bytes) in &self.0 {
+                    fs::write(path, bytes).unwrap();
+                }
+                if Path::new("/nonexistent").exists() {
+                    fs::remove_dir_all("/nonexistent").unwrap();
+                }
+            }
+        }
+        let saved = RestoreDatabases(
+            ["/etc/passwd", "/etc/group", "/etc/shadow"]
+                .into_iter()
+                .map(|path| {
+                    let bytes = fs::read(path).unwrap();
+                    assert!(
+                        !String::from_utf8_lossy(&bytes)
+                            .lines()
+                            .any(|line| line.starts_with("wolf-manager:"))
+                    );
+                    (PathBuf::from(path), bytes)
+                })
+                .collect(),
+        );
+        assert!(!account_exists().unwrap());
+        for (passwd, group, shadow, error) in [
+            (
+                "wolf-manager:x:32001:32001::/nonexistent:/bin/sh",
+                "wolf-manager:x:32001:",
+                "wolf-manager:!:0:0:99999:7:::",
+                None,
+            ),
+            (
+                "wolf-manager:x:0:32001::/nonexistent:/bin/sh",
+                "wolf-manager:x:32001:",
+                "wolf-manager:!:0:0:99999:7:::",
+                Some("existing account does not match restricted system account"),
+            ),
+            (
+                "wolf-manager:x:32001:0::/nonexistent:/bin/sh",
+                "wolf-manager:x:0:",
+                "wolf-manager:!:0:0:99999:7:::",
+                Some("existing account does not match restricted system account"),
+            ),
+            (
+                "wolf-manager:x:32001:32001::/root:/bin/sh",
+                "wolf-manager:x:32001:",
+                "wolf-manager:!:0:0:99999:7:::",
+                Some("existing account does not match restricted system account"),
+            ),
+            (
+                "wolf-manager:x:32001:32001::/nonexistent:/bin/bash",
+                "wolf-manager:x:32001:",
+                "wolf-manager:!:0:0:99999:7:::",
+                Some("existing account does not match restricted system account"),
+            ),
+            (
+                "wolf-manager:x:32001:32001::/nonexistent:/bin/sh",
+                "wolf-manager:x:32002:",
+                "wolf-manager:!:0:0:99999:7:::",
+                Some("account primary group is not dedicated"),
+            ),
+            (
+                "wolf-manager:x:32001:32001::/nonexistent:/bin/sh",
+                "wolf-manager:x:32001:\nfixture-admin:x:32002:wolf-manager",
+                "wolf-manager:!:0:0:99999:7:::",
+                Some("managed account has supplementary privileges"),
+            ),
+            (
+                "wolf-manager:x:32001:32001::/nonexistent:/bin/sh",
+                "wolf-manager:x:32001:\nmalformed",
+                "wolf-manager:!:0:0:99999:7:::",
+                Some("malformed group database"),
+            ),
+            (
+                "wolf-manager:x:32001:32001::/nonexistent:/bin/sh",
+                "wolf-manager:x:32001:",
+                "wolf-manager:unlocked-password:0:0:99999:7:::",
+                Some("managed account password is not locked"),
+            ),
+            (
+                "wolf-manager:x:32001:32001::/nonexistent:/bin/sh",
+                "wolf-manager:x:32001:",
+                "",
+                Some("managed account lacks shadow lock"),
+            ),
+        ] {
+            for ((path, original), appended) in saved.0.iter().zip([passwd, group, shadow]) {
+                let mut bytes = original.clone();
+                bytes.extend_from_slice(format!("{appended}\n").as_bytes());
+                fs::write(path, bytes).unwrap();
+            }
+            let before = saved
+                .0
+                .iter()
+                .map(|(path, _)| fs::read(path).unwrap())
+                .collect::<Vec<_>>();
+            let result = account_exists();
+            if let Some(expected) = error {
+                assert_eq!(result.unwrap_err().to_string(), expected);
+            } else {
+                assert!(result.unwrap());
+            }
+            assert_eq!(
+                saved
+                    .0
+                    .iter()
+                    .map(|(path, _)| fs::read(path).unwrap())
+                    .collect::<Vec<_>>(),
+                before
+            );
+        }
+        fs::create_dir("/nonexistent").unwrap();
+        fs::set_permissions("/nonexistent", fs::Permissions::from_mode(0o777)).unwrap();
+        assert_eq!(
+            validate_locked_home().unwrap_err().to_string(),
+            "managed home authority is unsafe"
+        );
+        fs::set_permissions("/nonexistent", fs::Permissions::from_mode(0o755)).unwrap();
+        validate_locked_home().unwrap();
+        fs::create_dir("/nonexistent/.ssh").unwrap();
+        assert_eq!(
+            validate_locked_home().unwrap_err().to_string(),
+            "managed home has SSH state; no implicit adoption of user environment"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires dedicated disposable root container and WOLF_TEST_NATIVE_VALIDATORS=1"]
+    fn native_adoption_accepts_recognized_units_without_touching_wolf_or_steam() {
+        assert_eq!(rustix::process::geteuid().as_raw(), 0);
+        assert_eq!(
+            std::env::var("WOLF_TEST_NATIVE_VALIDATORS").as_deref(),
+            Ok("1")
+        );
+        assert_eq!(
+            fs::read("/run/wolf-native-validator-fixture").unwrap(),
+            b"disposable-container"
+        );
+        let fixture = RootFixture::new();
+        let mut policy = fixture.request.policy.clone();
+        policy.service_unit = format!("wolf-fixture-{}.service", Uuid::new_v4());
+        let unit = PathBuf::from(format!("/etc/systemd/system/{}", policy.service_unit));
+        fs::create_dir_all(unit.parent().unwrap()).unwrap();
+        struct RemoveUnit(PathBuf);
+        impl Drop for RemoveUnit {
+            fn drop(&mut self) {
+                if self.0.exists() {
+                    fs::remove_file(&self.0).unwrap();
+                }
+            }
+        }
+        assert!(!unit.exists());
+        let _remove = RemoveUnit(unit.clone());
+        let config = policy
+            .wolf_config
+            .root
+            .join(&policy.wolf_config.relative_path);
+        let original_wolf = fs::read(&config).unwrap();
+        let steam_config = fixture.directory.path().join("profile/config/config.vdf");
+        let original_steam = fs::read(&steam_config).unwrap();
+        assert_eq!(
+            inspect_adopt(&policy).unwrap_err().to_string(),
+            "adoption requires an existing recognized unit"
+        );
+        for (bytes, accepted) in [
+            (format!("[Service]\nExecStart=/usr/bin/docker compose -f {} up --remove-orphans\n", policy.compose_file.display()).into_bytes(), true),
+            (format!("[Service]\nWorkingDirectory={}\nExecStart=/usr/bin/docker compose up --remove-orphans\nExecStop=/usr/bin/docker compose down --remove-orphans\n", policy.compose_file.parent().unwrap().display()).into_bytes(), true),
+            (b"[Service]\nExecStart=/bin/sh /custom/start-wolf\n".to_vec(), false),
+            (vec![255], false),
+        ] {
+            fs::write(&unit, &bytes).unwrap();
+            fs::set_permissions(&unit, fs::Permissions::from_mode(0o644)).unwrap();
+            assert_eq!(inspect_adopt(&policy).is_ok(), accepted);
+            assert_eq!(fs::read(&unit).unwrap(), bytes);
+            assert_eq!(fs::read(&config).unwrap(), original_wolf);
+            assert_eq!(fs::read(&steam_config).unwrap(), original_steam);
+            assert!(!policy.state_root.exists());
+        }
+    }
+
+    fn install_then_upgrade(fixture: &mut RootFixture) -> (InstallPlan, Vec<u8>) {
+        let first = preflight_with(&fixture.request, &fixture.environment).unwrap();
+        apply_with(&first, &fixture.environment).unwrap();
+        let receipt = fs::read(first.policy.state_root.join("installation.json")).unwrap();
+        let mut binary = fs::read(&fixture.request.source_binary).unwrap();
+        binary[127] = 1;
+        fs::write(&fixture.request.source_binary, binary).unwrap();
+        let upgrade = preflight_with(&fixture.request, &fixture.environment).unwrap();
+        assert!(upgrade.receipt_identity.is_some());
+        apply_with(&upgrade, &fixture.environment).unwrap();
+        (upgrade, receipt)
+    }
+
+    fn installed_snapshot(plan: &InstallPlan) -> Vec<(PathBuf, Vec<u8>, FileIdentity)> {
+        plan.proposed_writes
+            .iter()
+            .map(|write| {
+                let (bytes, identity) = read(&write.destination).unwrap();
+                (write.destination.clone(), bytes, identity)
+            })
+            .chain(std::iter::once({
+                let path = plan.policy.state_root.join("installation.json");
+                let (bytes, identity) = read(&path).unwrap();
+                (path, bytes, identity)
+            }))
+            .collect()
+    }
+
+    #[test]
+    #[ignore = "requires disposable root container; never execute on household host"]
+    fn upgrade_rollback_restores_previous_installation_and_preserves_pairings_and_steam() {
+        assert_eq!(rustix::process::geteuid().as_raw(), 0);
+        let mut fixture = RootFixture::new();
+        let steam_save = fixture
+            .directory
+            .path()
+            .join("profile/userdata/valuable-save");
+        fs::write(&steam_save, b"irreplaceable Steam save").unwrap();
+        let (upgrade, first_receipt) = install_then_upgrade(&mut fixture);
+        let binary_write = upgrade
+            .proposed_writes
+            .iter()
+            .find(|write| write.destination.ends_with("wolf-manager-host"))
+            .unwrap();
+        let original_identity = binary_write.expected.clone().unwrap();
+        let config = upgrade
+            .policy
+            .wolf_config
+            .root
+            .join(&upgrade.policy.wolf_config.relative_path);
+        let paired = b"config_version=7\nuuid=\"preserve\"\npaired_clients=[\"new-client\"]\n";
+        fs::write(&config, paired).unwrap();
+        let report = rollback_with(&upgrade, &fixture.environment).unwrap();
+        assert!(report.changed_files.contains(&binary_write.destination));
+        assert!(matches_identity(
+            &read(&binary_write.destination).unwrap().1,
+            &original_identity
+        ));
+        assert_eq!(
+            fs::read(upgrade.policy.state_root.join("installation.json")).unwrap(),
+            first_receipt
+        );
+        assert_eq!(fs::read(config).unwrap(), paired);
+        assert_eq!(fs::read(steam_save).unwrap(), b"irreplaceable Steam save");
+        assert!(
+            report
+                .verified_backup_directory
+                .join("receipt-preimage")
+                .exists()
+        );
+    }
+
+    #[test]
+    #[ignore = "requires disposable root container; never execute on household host"]
+    fn upgrade_rollback_can_restore_verified_backups_without_displaced_inodes() {
+        assert_eq!(rustix::process::geteuid().as_raw(), 0);
+        let mut fixture = RootFixture::new();
+        let (plan, first_receipt) = install_then_upgrade(&mut fixture);
+        let folder = saved_plan(&plan).unwrap();
+        let binary = plan
+            .proposed_writes
+            .iter()
+            .find(|write| write.destination.ends_with("wolf-manager-host"))
+            .unwrap();
+        let displaced = binary
+            .destination
+            .parent()
+            .unwrap()
+            .join(format!(".wolf-manager-{}.previous", plan.id));
+        let original_binary = fs::read(&displaced).unwrap();
+        fs::rename(&displaced, folder.join("retained-original-binary")).unwrap();
+        let displaced_receipt = plan
+            .policy
+            .state_root
+            .join(format!(".installation-{}.previous", plan.id));
+        fs::rename(&displaced_receipt, folder.join("retained-original-receipt")).unwrap();
+        rollback_with(&plan, &fixture.environment).unwrap();
+        assert_eq!(fs::read(&binary.destination).unwrap(), original_binary);
+        assert_eq!(
+            fs::read(plan.policy.state_root.join("installation.json")).unwrap(),
+            first_receipt
+        );
+        assert_eq!(
+            fs::read(folder.join("retained-original-binary")).unwrap(),
+            original_binary
+        );
+        assert_eq!(
+            fs::read(folder.join("retained-original-receipt")).unwrap(),
+            first_receipt
+        );
+    }
+
+    #[test]
+    #[ignore = "requires disposable root container; never execute on household host"]
+    fn changed_source_after_preview_refuses_before_creating_installation_state() {
+        assert_eq!(rustix::process::geteuid().as_raw(), 0);
+        let fixture = RootFixture::new();
+        let plan = preflight_with(&fixture.request, &fixture.environment).unwrap();
+        let original_config =
+            fs::read(fixture.request.policy.wolf_config.root.join("config.toml")).unwrap();
+        let mut source = fs::read(&fixture.request.source_binary).unwrap();
+        source[127] = 42;
+        fs::write(&fixture.request.source_binary, source).unwrap();
+        assert_eq!(
+            apply_with(&plan, &fixture.environment)
+                .unwrap_err()
+                .to_string(),
+            "installer inputs changed since preview; no writes permitted"
+        );
+        assert!(!fixture.request.policy.backup_root.exists());
+        assert!(!fixture.request.policy.state_root.exists());
+        assert!(!fixture.environment.prefix.as_ref().unwrap().exists());
+        assert_eq!(
+            fs::read(fixture.request.policy.wolf_config.root.join("config.toml")).unwrap(),
+            original_config
+        );
+    }
+
+    #[test]
+    #[ignore = "requires disposable root container; never execute on household host"]
+    fn rollback_refuses_corrupt_or_untrusted_backups_before_any_installed_write() {
+        assert_eq!(rustix::process::geteuid().as_raw(), 0);
+        for untrusted_mode in [false, true] {
+            let mut fixture = RootFixture::new();
+            let (plan, _) = install_then_upgrade(&mut fixture);
+            let folder = saved_plan(&plan).unwrap();
+            let index = plan
+                .proposed_writes
+                .iter()
+                .position(|write| write.destination.ends_with("wolf-manager-host"))
+                .unwrap();
+            let backup = folder.join(format!("preimage-{index}"));
+            if untrusted_mode {
+                fs::set_permissions(&backup, fs::Permissions::from_mode(0o644)).unwrap();
+            } else {
+                fs::write(&backup, b"corrupted retained preimage").unwrap();
+            }
+            let corrupted_backup = read(&backup).unwrap();
+            let installed = installed_snapshot(&plan);
+            let error = rollback_with(&plan, &fixture.environment).unwrap_err();
+            assert_eq!(error.to_string(), "rollback backup is corrupt or untrusted");
+            assert_eq!(installed_snapshot(&plan), installed);
+            assert_eq!(read(&backup).unwrap(), corrupted_backup);
+            assert!(folder.join("plan.json").exists());
+        }
+    }
+
+    #[test]
+    #[ignore = "requires disposable root container; never execute on household host"]
+    fn rollback_refuses_corrupt_previous_receipt_before_restoring_files() {
+        assert_eq!(rustix::process::geteuid().as_raw(), 0);
+        let mut fixture = RootFixture::new();
+        let (plan, _) = install_then_upgrade(&mut fixture);
+        let folder = saved_plan(&plan).unwrap();
+        let backup = folder.join("receipt-preimage");
+        fs::write(&backup, b"corrupted previous installation receipt").unwrap();
+        let installed = installed_snapshot(&plan);
+        let error = rollback_with(&plan, &fixture.environment).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "previous installation receipt backup is corrupt"
+        );
+        assert_eq!(installed_snapshot(&plan), installed);
+        assert_eq!(
+            fs::read(backup).unwrap(),
+            b"corrupted previous installation receipt"
+        );
+        assert!(folder.join("plan.json").exists());
+    }
+
     #[test]
     #[ignore = "requires disposable root container; never execute on household host"]
     fn bootstrap_default_state_survives_rollback_with_new_pairings() {

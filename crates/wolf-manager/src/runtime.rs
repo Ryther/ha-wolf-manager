@@ -123,42 +123,46 @@ impl Cli {
             return Err(SafeError::validation());
         }
         match self.mode {
-            Mode::Ingress => {
-                if self.mqtt_disabled
-                    || self.mqtt_host.is_some()
-                    || self.mqtt_username.is_some()
-                    || self.mqtt_password_file.is_some()
-                {
-                    return Err(SafeError::validation());
-                }
-                if self.public_origin.is_some()
-                    || self.bootstrap_token_file.is_some()
-                    || self.tls_cert_file.is_some()
-                    || self.tls_key_file.is_some()
-                    || !self.trusted_proxy.is_empty()
-                {
-                    return Err(SafeError::validation());
-                }
-            }
-            Mode::Standalone => {
-                if !self.mqtt_disabled && self.mqtt_host.is_none() {
-                    return Err(SafeError::validation());
-                }
-                let origin = normalize_origin(
-                    self.public_origin
-                        .as_deref()
-                        .ok_or_else(SafeError::validation)?,
-                )?;
-                if !origin.starts_with("https://") || self.bootstrap_token_file.is_none() {
-                    return Err(SafeError::validation());
-                }
-                let native = self.tls_cert_file.is_some() && self.tls_key_file.is_some();
-                if self.tls_cert_file.is_some() != self.tls_key_file.is_some()
-                    || native == !self.trusted_proxy.is_empty()
-                {
-                    return Err(SafeError::validation());
-                }
-            }
+            Mode::Ingress => self.validate_ingress()?,
+            Mode::Standalone => self.validate_standalone()?,
+        }
+        Ok(())
+    }
+    fn validate_ingress(&self) -> Result<(), SafeError> {
+        if self.mqtt_disabled
+            || self.mqtt_host.is_some()
+            || self.mqtt_username.is_some()
+            || self.mqtt_password_file.is_some()
+        {
+            return Err(SafeError::validation());
+        }
+        if self.public_origin.is_some()
+            || self.bootstrap_token_file.is_some()
+            || self.tls_cert_file.is_some()
+            || self.tls_key_file.is_some()
+            || !self.trusted_proxy.is_empty()
+        {
+            return Err(SafeError::validation());
+        }
+        Ok(())
+    }
+    fn validate_standalone(&self) -> Result<(), SafeError> {
+        if !self.mqtt_disabled && self.mqtt_host.is_none() {
+            return Err(SafeError::validation());
+        }
+        let origin = normalize_origin(
+            self.public_origin
+                .as_deref()
+                .ok_or_else(SafeError::validation)?,
+        )?;
+        if !origin.starts_with("https://") || self.bootstrap_token_file.is_none() {
+            return Err(SafeError::validation());
+        }
+        let native = self.tls_cert_file.is_some() && self.tls_key_file.is_some();
+        if self.tls_cert_file.is_some() != self.tls_key_file.is_some()
+            || native == !self.trusted_proxy.is_empty()
+        {
+            return Err(SafeError::validation());
         }
         Ok(())
     }
