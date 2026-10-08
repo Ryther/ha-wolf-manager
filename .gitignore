@@ -1,0 +1,14 @@
+# Local planning waves and validation evidence are intentionally unpublished.
+/_test/
+/_tmp/
+/docs/waves/
+
+# Local credentials, generated state and build artifacts.
+/.env
+/.env.*
+!/.env.example
+/target/
+/.devcontainer/state/
+/.ux-review-required.md
+**/__pycache__/
+*.pyc
