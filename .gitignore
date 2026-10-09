@@ -377,3 +377,4 @@
 !/scripts/ci/sonar_community.py
 !/tests/release/test_sonar_routing.py
 !/tests/release/test_sonar_community.py
+!/tests/release/test_host_diagnostics.py

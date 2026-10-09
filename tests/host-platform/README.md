@@ -41,6 +41,10 @@ streaming or live Home Assistant behavior. Container results must be labeled
 **container-only** in compatibility documentation.
 
 Results and bounded failure logs are written under ignored `_tmp/host-platform/`.
+Each distribution retains at most 1 MiB of combined command output and a separate
+1 MiB setup log. Results record the failed stage, controlled error code, timeout,
+cleanup outcome and discarded-byte counts. Timeout output remains available;
+truncated successful evidence is refused rather than reported as a pass.
 They include resolved image digests, installed tool versions and `/etc/os-release`.
 Distribution repository state can change even with a pinned base image; compare
 recorded package versions when investigating a later difference. Refresh image
