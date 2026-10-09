@@ -1,4 +1,4 @@
-name: Reusable candidate tests
+name: Tests
 'on':
   workflow_call:
     inputs:
