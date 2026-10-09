@@ -16,6 +16,7 @@ modify Home Assistant configuration automatically.
 Read the relevant code and public technical documentation before changes:
 
 - `Cargo.toml`, `Cargo.lock` and `rust-toolchain.toml`: build and dependency inputs.
+- Root `sonar-project.properties`: analysis identity, source scope and coverage inputs.
 - `docs/contracts/`: configuration, API, SSH, MQTT and release boundaries.
 - `docs/development/crate-contract.md`: module interfaces and implementation rules.
 - `docs/development/host-adapter-contract.md`: root policy and installation inputs.
@@ -45,7 +46,7 @@ python -m pip install --only-binary ':all:' -r scripts/ci/requirements.txt
 cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked --workspace
-npm ci
+npm ci --ignore-scripts
 npm run test:ui
 python -m unittest discover -s tests/release -v
 python -m pip install --only-binary ':all:' -r docs/requirements.txt

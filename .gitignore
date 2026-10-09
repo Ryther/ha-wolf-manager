@@ -370,3 +370,10 @@
 
 !/scripts/ci/evidence_output.py
 !/tests/release/test_evidence_output.py
+!/.github/dependabot.yml
+!/.github/workflows/commits.yaml
+!/scripts/ci/commitizen-requirements.txt
+!/scripts/ci/sonar_aggregate.py
+!/scripts/ci/sonar_community.py
+!/tests/release/test_sonar_routing.py
+!/tests/release/test_sonar_community.py

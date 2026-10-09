@@ -1,5 +1,7 @@
 """Bind Sonar's completed gate and imported language coverage to the exact SHA."""
 import argparse
+from contextlib import contextmanager, nullcontext
+from contextvars import ContextVar
 import math
 import os
 from pathlib import Path
@@ -9,12 +11,33 @@ import urllib.parse
 import urllib.request
 from scripts.ci import evidence_output as e, producer as p, verify_candidate as v
 
+SERVER = ContextVar('sonar_server', default='https://sonarcloud.io')
+TOKEN = ContextVar('sonar_token', default=None)
+COMMUNITY = 'http://127.0.0.1:9000'
+
+
+@contextmanager
+def server(url, token):
+    v.require(url in ('https://sonarcloud.io', COMMUNITY), 'sonar_server_origin')
+    v.require(isinstance(token, str) and 0 < len(token) <= 4096
+              and not any(ord(c) < 33 or ord(c) == 127 for c in token), 'sonar_token')
+    endpoint = SERVER.set(url)
+    credential = TOKEN.set(token)
+    try:
+        yield
+    finally:
+        TOKEN.reset(credential)
+        SERVER.reset(endpoint)
+
 
 def get(path):
     v.require(path.startswith('/api/') and '\r' not in path and '\n' not in path, 'sonar_api_path')
-    request = urllib.request.Request('https://sonarcloud.io' + path,
-        headers={'Authorization': 'Bearer ' + os.environ['SONAR_TOKEN']})
-    with urllib.request.build_opener(v._NoRedirect).open(request, timeout=30) as response:
+    token = TOKEN.get()
+    if token is None:
+        token = os.environ['SONAR_TOKEN']
+    request = urllib.request.Request(SERVER.get() + path,
+        headers={'Authorization': 'Bearer ' + token})
+    with urllib.request.build_opener(urllib.request.ProxyHandler({}), v._NoRedirect).open(request, timeout=30) as response:
         return v.json_bytes(response.read(8 * 1024 * 1024 + 1))
 
 
@@ -171,7 +194,7 @@ def completed_analysis(task_path, project, sha):
     pairs = [line.split('=', 1) for line in task_path.read_text().splitlines() if '=' in line]
     v.require(len({key for key, _ in pairs}) == len(pairs), 'sonar_task_metadata')
     task = dict(pairs)
-    v.require(task.get('serverUrl', '').rstrip('/') == 'https://sonarcloud.io'
+    v.require(task.get('serverUrl', '').rstrip('/') == SERVER.get()
               and task.get('projectKey') == project and re.fullmatch(r'[A-Za-z0-9_-]{1,200}', task.get('ceTaskId', '')),
               'sonar_task_metadata')
     completed = get('/api/ce/task?id=' + task['ceTaskId'])['task']
@@ -233,10 +256,15 @@ def main():
     parser.add_argument('--rust-lcov', type=Path, required=True)
     parser.add_argument('--javascript-lcov', type=Path, required=True)
     parser.add_argument('--python-xml', type=Path, required=True)
+    parser.add_argument('--server-url', choices=('https://sonarcloud.io', COMMUNITY), default='https://sonarcloud.io')
     args = parser.parse_args()
     try:
-        e.Output(args.output).write_file(p.encoded(verify(args.task, args.project, args.sha, args.rust_lcov,
-                                               args.javascript_lcov, args.python_xml)))
+        output = e.Output(args.output)
+        context = (server(COMMUNITY, os.environ['SONAR_LOCAL_TOKEN'])
+                   if args.server_url == COMMUNITY else nullcontext())
+        with context:
+            output.write_file(p.encoded(verify(args.task, args.project, args.sha, args.rust_lcov,
+                                             args.javascript_lcov, args.python_xml)))
     except Exception:
         raise SystemExit('Sonar exact-candidate gate refused; credentials and raw API errors are not logged.')
 
