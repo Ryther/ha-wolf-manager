@@ -1,6 +1,8 @@
 """End-to-end protected receiver refusal tests with independent API fixtures."""
 import base64
 import io
+import os
+import urllib.parse
 from pathlib import Path
 import tempfile
 import unittest
@@ -51,6 +53,78 @@ class PublisherTests(unittest.TestCase):
     def prepare(self):
         with patch('scripts.ci.artifacts.download', self.download):
             return p.prepare(self.authority, 99, 77, self.output)
+
+    def publishing_fixture(self, mutate=None, native_omission=False):
+        prepared = self.prepare()
+        original_get = self.authority.get_json
+        self.authority.get_json = lambda path: [] if path.endswith('/assets?per_page=100') else original_get(path)
+        writes = []
+        def write(method, path, value=None, raw=None):
+            writes.append((method, path, value))
+            if method == 'POST':
+                name = urllib.parse.parse_qs(urllib.parse.urlsplit(path).query)['name'][0]
+                return {'name': name, 'size': len(raw), 'digest': 'sha256:' + v.sha256(raw)}
+            self.assertEqual(method, 'PATCH')
+            response = {'id': 1, 'tag_name': 'v0.1.0', 'target_commitish': SHA,
+                        'draft': False, 'prerelease': False}
+            if native_omission:
+                # Native API observed omission: a draft update without tag_name loses its association.
+                response['tag_name'] = value.get('tag_name', 'untagged-native-omission')
+                response['target_commitish'] = value.get('target_commitish', 'main')
+            return mutate(response) if mutate else response
+        self.authority.write = write
+        return prepared, writes
+
+    def run_publish(self, prepared):
+        with patch.dict(os.environ, {'GITHUB_ACTOR': 'fixture'}), patch.object(p.r, 'Registry'), \
+                patch.object(p.r, 'publish', return_value=self.fixture.receipt['image']['index_digest']), \
+                patch.object(p.r, 'verify_public'):
+            return p.publish(self.authority, prepared, self.output)
+
+    def test_final_transition_preserves_explicit_tag_and_exact_commit_despite_native_omission(self):
+        prepared, writes = self.publishing_fixture(native_omission=True)
+        publication = self.run_publish(prepared)
+        method, path, value = writes[-1]
+        self.assertEqual(method, 'PATCH')
+        self.assertEqual(path, '/repos/' + REPO + '/releases/1')
+        self.assertEqual(value.get('tag_name'), 'v0.1.0')
+        self.assertEqual(value.get('target_commitish'), SHA)
+        self.assertIs(value['draft'], False)
+        self.assertIs(value['prerelease'], False)
+        self.assertEqual(publication['candidate_sha'], SHA)
+
+    def test_final_transition_refuses_git_tag_change_even_with_valid_api_metadata(self):
+        def move_tag(response):
+            self.tag_sha = 'b' * 40
+            return response
+        prepared, writes = self.publishing_fixture(move_tag)
+        self.assertEqual(self.tag_sha, SHA)
+        with self.assertRaisesRegex(v.VerificationError, '^publisher_published_tag$'):
+            self.run_publish(prepared)
+        self.assertEqual(writes[-1][0], 'PATCH')
+        self.assertEqual(writes[-1][2]['target_commitish'], SHA)
+        self.assertEqual(self.tag_sha, 'b' * 40)
+
+    def test_final_transition_refuses_unconfirmed_or_changed_api_release_identity(self):
+        mutations = {
+            'id': lambda response: {**response, 'id': 2},
+            'bool-id': lambda response: {**response, 'id': True},
+            'float-id': lambda response: {**response, 'id': 1.0},
+            'tag': lambda response: {**response, 'tag_name': 'untagged-native-omission'},
+            'target': lambda response: {**response, 'target_commitish': 'b' * 40},
+            'draft': lambda response: {**response, 'draft': True},
+            'prerelease': lambda response: {**response, 'prerelease': True},
+            'numeric-draft': lambda response: {**response, 'draft': 0},
+            'numeric-prerelease': lambda response: {**response, 'prerelease': 0},
+            'missing': lambda response: {},
+            'null': lambda response: None,
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(mutation=name):
+                self.setUp()
+                prepared, writes = self.publishing_fixture(mutate)
+                with self.assertRaises(v.VerificationError): self.run_publish(prepared)
+                self.assertEqual(writes[-1][0], 'PATCH')
 
     def test_receiver_checks_full_original_zip_and_all_independent_jobs(self):
         result = self.prepare()

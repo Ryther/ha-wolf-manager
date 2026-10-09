@@ -59,7 +59,7 @@ Use conventional commits and review the PR prepared by **Release**. Release Plea
 
 The initial bootstrap uses an empty manifest and `initial-version: 0.1.0`. After that proposal is merged, subsequent proposals advance the committed manifest according to Conventional Commits. An earlier draft can remain unpublished while a corrected patch is prepared. Review changelog, manifest and every coordinated version update before merging the release PR. The configured release is a **draft**, and its `v<version>` tag must resolve to the exact commit of the successful candidate. Tag creation does not authorize publication.
 
-An ordinary main push also runs CI and builds an immutable tested artifact but is not a publication request unless a matching coordinated draft/tag exists. Never move an existing release tag to make a failed identity check pass.
+An ordinary main push also runs CI and builds an immutable tested artifact but is not a publication request unless a matching coordinated draft/tag exists. Never move an existing release tag to make a failed identity check pass. The publisher sends the exact tag and candidate commit explicitly in the final draft update, verifies the returned public release identity, and rechecks the unchanged Git tag.
 
 ## Inspect the exact CI artifacts
 

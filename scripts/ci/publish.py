@@ -86,6 +86,14 @@ def prepare(authority, run_id, workflow_id, output):
     return expected, release_id, candidate_path, result
 
 
+def confirm_published_release(release, expected, release_id):
+    v.require(isinstance(release, dict) and v.positive_int(release.get('id'))
+              and release['id'] == release_id and release.get('tag_name') == 'v' + expected.version
+              and release.get('target_commitish') == expected.candidate_sha
+              and release.get('draft') is False and release.get('prerelease') is False,
+              'publisher_public_release_identity')
+
+
 def publish(authority, prepared, output):
     expected, release_id, candidate_path, evidence = prepared
     _, files = v.bundle_files(candidate_path)
@@ -123,7 +131,10 @@ def publish(authority, prepared, output):
         raise v.VerificationError('publisher_image_not_public') from None
     # Re-check tag just before making the existing draft public; no ref changes.
     v.require(tag_commit(authority, expected.version) == expected.candidate_sha, 'publisher_final_tag')
-    authority.write('PATCH', prefix, {'draft': False, 'prerelease': False})
+    release = authority.write('PATCH', prefix, {'tag_name': 'v' + expected.version,
+        'target_commitish': expected.candidate_sha, 'draft': False, 'prerelease': False})
+    confirm_published_release(release, expected, release_id)
+    v.require(tag_commit(authority, expected.version) == expected.candidate_sha, 'publisher_published_tag')
     return publication
 
 
