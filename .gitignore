@@ -263,6 +263,7 @@
 !/tests/release/test_registry.py
 !/tests/release/test_sonar.py
 !/tests/release/test_subject.py
+!/tests/release/test_codeql_supervisor.py
 !/version.txt
 !/web/app.js
 !/web/index.html

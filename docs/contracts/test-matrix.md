@@ -60,10 +60,13 @@ The real HA device page observed the Wolf switch ON and both game sensors.
 The documented screenshots are actual browser captures, not intercepted API
 fixtures. The manifest entries do not establish that games were installed or
 played. GPU encoding, Moonlight streaming and the complete ARM host-to-manager
-installation remain untested. Native ARM scratch startup has passed on GitHub;
-the expanded per-platform TLS/SSH/MQTT/state/shutdown fixture must also pass in
-the exact release candidate run. Other distribution evidence remains
-container-only as listed in the README.
+installation remain untested. Expanded native amd64 and arm64 scratch fixtures
+passed in [GitHub PR run 37863000299](https://github.com/Ryther/ha-wolf-manager/actions/runs/37863000299)
+for head `226251c` and merge subject `07c3a67`. Each fixture exercised the exact
+built image through verified HTTPS, pinned SSH, MQTT5 over TLS, protected writable
+state, native healthcheck, drained SIGTERM and retained restart state. This PR
+evidence must be repeated for the exact release candidate SHA before publication.
+Other distribution evidence remains container-only as listed in the README.
 
 Manager updates retained the same Supervisor `/data` mapping, byte-verified cold
 backups and previous images. Native host upgrades retained reviewed installer
@@ -92,34 +95,40 @@ High line coverage does not replace real OS, protocol-ordering, crash-safety or
 streaming checks. A configured overall-coverage gate must be reported honestly
 when it fails.
 
-The frozen `5f8334a` analysis imported all 52 Rust, two JavaScript and 11 Python
-files with exact executable/uncovered-line counts. Combined coverage was
-**81.0% (12,573/15,524 executable lines)** and the local overall 80% gate passed.
-The analysis had no unresolved maintainability findings, reported bugs,
-vulnerabilities or security hotspots; this does not establish absence of defects.
+Fresh reports from [GitHub PR run 37863000299](https://github.com/Ryther/ha-wolf-manager/actions/runs/37863000299),
+head `226251c` and merge subject `07c3a67`, measured
+**81.2% (12,691/15,625 executable lines)** across Rust LCOV execution records,
+Python Cobertura and JavaScript LCOV. The original candidate-subject ZIP and its
+artifact digests were independently verified before accepting the extracted
+reports and their source identity. This PR workflow does not run SonarCloud;
+fresh reports do not replace the trusted release candidate's analysis.
+
+Separately, the local SonarQube Community analysis at `1ad8661` verified exact
+per-file imports for all 52 Rust, two JavaScript and 11 Python report files,
+reported the same 81.2% overall coverage and passed its overall 80% gate. It had
+no unresolved findings, reported bugs, vulnerabilities or security hotspots.
+This local result does not establish absence of defects or certify a later SHA.
 
 | Component | Covered / executable lines | Line coverage |
 | --- | ---: | ---: |
-| Rust workspace | 11,142 / 13,904 | 80.13% |
+| Rust workspace | 11,142 / 13,904 | 80.14% |
 | Core contracts | 660 / 700 | 94.29% |
 | Host toolkit | 6,066 / 7,325 | 82.81% |
 | Manager | 4,416 / 5,879 | 75.11% |
-| Python release tooling | 1,067 / 1,245 | 85.70% |
+| Python release tooling | 1,185 / 1,346 | 88.04% |
 | Browser and Node coverage converter | 364 / 375 | 97.07% |
 
-Fresh Python execution passed 71 release tests. Chromium execution at `bcbb742`
-passed 34 browser journeys, including keyboard/mobile controls, stale revisions,
+The fresh PR execution passed 84 Python release tests and 34 Chromium browser
+journeys, including keyboard/mobile controls, stale revisions,
 authentication expiry, unknown observations and confirmed stopped hosts. V8
 execution includes the Node converter itself; imported coverage is not generated
-from an inventory of unexecuted code. Browser assets, tests, converter and npm
-inputs were byte-identical at `5f8334a` before reusing the measured V8 report.
+from an inventory of unexecuted code.
 
-Fresh Rust execution at `c5f06d3` passed 220 standard tests and all 22 explicitly
-selected broker/root cases; strict workspace Clippy passed. Rust/test, Cargo,
-toolchain and vendored dependency inputs were byte-identical at `5f8334a` before
-reusing those reports for the packaging-only revision. LLVM summary coverage
-was **78.87% (11,555/14,650 lines)**; its accounting differs from the imported
-LCOV denominator above. Neither report measures branch coverage.
+Fresh Rust execution in that PR run passed 242 tests: 220 standard tests and all
+22 explicitly selected broker/root cases; strict workspace Clippy passed. LLVM
+summary coverage was **78.89% (11,558/14,650 lines)**; its accounting differs from
+the encoded LCOV execution-line denominator above. Neither report measures
+branch coverage.
 Integration-test files are excluded from the Rust
 source report; inline test modules remain included. The executable denominator
 therefore includes those inline tests and is not a production-only metric.
