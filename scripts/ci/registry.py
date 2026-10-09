@@ -20,6 +20,7 @@ BLOB_PATH = 'blobs/'
 BLOB_UPLOAD_PATH = 'blobs/uploads/'
 
 OCI_BLOB_PREFIX = 'oci/blobs/sha256/'
+OCI_INDEX_FILE = 'oci/index.json'
 
 
 AUTHENTICATION_PHASE = 'authentication'
@@ -48,16 +49,6 @@ def request_phase(method, path):
             return phase
     return 'request'
 
-
-def upload_path(url):
-    parsed = urllib.parse.urlsplit(url)
-    v.require(not parsed.fragment and not parsed.username and not parsed.password
-              and (not parsed.netloc and not parsed.scheme or
-                   parsed.scheme == 'https' and parsed.netloc == 'ghcr.io')
-              and parsed.path.startswith(PREFIX + BLOB_UPLOAD_PATH)
-              and '..' not in parsed.path and '\\' not in parsed.path
-              and '\r' not in url and '\n' not in url, 'registry_upload_origin')
-    return parsed.path + ('?' + parsed.query if parsed.query else '')
 
 
 class Registry:
@@ -121,23 +112,6 @@ def header(headers, key):
     return matches[0]
 
 
-def transfer_blob(files, descriptor, request, done):
-    digest = descriptor['digest']
-    if digest in done: return
-    data = files[OCI_BLOB_PREFIX + v.parse_digest(digest)]
-    status, headers, _ = request('HEAD', PREFIX + BLOB_PATH + digest)
-    if status == 404:
-        status, headers, _ = request('POST', PREFIX + BLOB_UPLOAD_PATH, b'', 'application/octet-stream')
-        v.require(status == 202, 'registry_start_upload')
-        location = upload_path(header(headers, 'Location'))
-        location += ('&' if '?' in location else '?') + 'digest=' + urllib.parse.quote(digest, safe='')
-        status, headers, _ = request('PUT', location, data, 'application/octet-stream')
-        v.require(status == 201 and header(headers, 'Docker-Content-Digest') == digest, 'registry_blob_upload')
-        status, headers, _ = request('HEAD', PREFIX + BLOB_PATH + digest)
-    v.require(status == 200 and header(headers, 'Docker-Content-Digest') == digest
-              and header(headers, 'Content-Length') == str(len(data)), 'registry_blob_identity')
-    done.add(digest)
-
 def transfer_manifest(files, descriptor, reference, request):
     data = files[OCI_BLOB_PREFIX + v.parse_digest(descriptor['digest'])]
     status, headers, downloaded = request('GET', PREFIX + MANIFEST_PATH + reference)
@@ -153,24 +127,25 @@ def transfer_manifest(files, descriptor, reference, request):
     v.require(status == 200 and downloaded == data
               and header(headers, 'Docker-Content-Digest') == descriptor['digest'], 'registry_manifest_identity')
 
-def publish(files, image, request):
-    v.verify_oci(files, image)
-    v.require(image['repository'] == 'ghcr.io/ryther/ha-wolf-manager'
-              and v.SEMVER.fullmatch(image['tag']), 'registry_subject')
+def check_tag(image, request):
     status, headers, existing = request('GET', PREFIX + MANIFEST_PATH + image['tag'])
     if status == 200:
         v.require(v.sha256(existing) == v.parse_digest(image['index_digest'])
                   and header(headers, 'Docker-Content-Digest') == image['index_digest'], 'registry_tag_rebind')
     v.require(status in (200, 404), 'registry_tag_status')
-    done = set()
-    root = v.json_bytes(files['oci/index.json'])['manifests'][0]
-    index = v.json_bytes(files[OCI_BLOB_PREFIX + v.parse_digest(root['digest'])])
-    for descriptor in index['manifests']:
-        content = v.json_bytes(files[OCI_BLOB_PREFIX + v.parse_digest(descriptor['digest'])])
-        transfer_blob(files, content['config'], request, done)
-        for layer in content['layers']:
-            transfer_blob(files, layer, request, done)
-        transfer_manifest(files, descriptor, descriptor['digest'], request)
+
+
+def publish(files, image, request, *, transfer):
+    v.verify_oci(files, image)
+    v.require(image['repository'] == 'ghcr.io/ryther/ha-wolf-manager'
+              and v.SEMVER.fullmatch(image['tag']), 'registry_subject')
+    check_tag(image, request)
+    transfer(files, image)
+    # Bulk copy is digest-only: it cannot authorize a changed version tag.
+    check_tag(image, request)
+    verify_graph(files, image, request)
+    root = v.json_bytes(files[OCI_INDEX_FILE])['manifests'][0]
+    # transfer_manifest independently checks the tag immediately before binding.
     transfer_manifest(files, root, image['tag'], request)
     return root['digest']
 
@@ -183,13 +158,12 @@ def verify_public_manifest(files, descriptor, reference, request):
               and header(headers, 'Docker-Content-Digest') == digest, 'registry_public_manifest_identity')
 
 
-def verify_public(files, image, request):
-    """Read the exact tag, index, platforms and blob identities with public access."""
+def verify_graph(files, image, request):
+    """Read every original index, platform manifest and blob identity."""
     v.verify_oci(files, image)
     v.require(image['repository'] == 'ghcr.io/ryther/ha-wolf-manager'
               and v.SEMVER.fullmatch(image['tag']), 'registry_public_subject')
-    root = v.json_bytes(files['oci/index.json'])['manifests'][0]
-    verify_public_manifest(files, root, image['tag'], request)
+    root = v.json_bytes(files[OCI_INDEX_FILE])['manifests'][0]
     verify_public_manifest(files, root, root['digest'], request)
     index = v.json_bytes(files[OCI_BLOB_PREFIX + v.parse_digest(root['digest'])])
     blobs = {}
@@ -203,3 +177,11 @@ def verify_public(files, image, request):
         v.require(status == 200 and header(headers, 'Docker-Content-Digest') == digest
                   and header(headers, 'Content-Length') == str(descriptor['size']), 'registry_public_blob_identity')
     return root['digest']
+
+
+def verify_public(files, image, request):
+    """Verify anonymous graph access and the exact final version tag."""
+    digest = verify_graph(files, image, request)
+    root = v.json_bytes(files[OCI_INDEX_FILE])['manifests'][0]
+    verify_public_manifest(files, root, image['tag'], request)
+    return digest

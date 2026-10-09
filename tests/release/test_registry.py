@@ -33,11 +33,6 @@ class RegistryTests(unittest.TestCase):
                 digest = path.rsplit('/', 1)[1]
                 if digest not in stored: return 404, {}, b''
                 return 200, {'Docker-Content-Digest': digest, 'Content-Length': str(len(stored[digest]))}, b''
-            if method == 'POST': return 202, {'Location': '/v2/ryther/ha-wolf-manager/blobs/uploads/id'}, b''
-            if method == 'PUT' and '/blobs/uploads/' in path:
-                digest = path.split('digest=')[1].replace('%3A', ':')
-                stored[digest] = data
-                return 201, {'Docker-Content-Digest': digest}, b''
             reference = path.rsplit('/', 1)[1]
             if method == 'PUT':
                 manifests[reference] = data
@@ -47,23 +42,82 @@ class RegistryTests(unittest.TestCase):
                 data = manifests[reference]
                 return 200, {'Docker-Content-Digest': 'sha256:' + v.sha256(data)}, data
             raise AssertionError((method, path))
-        result = r.publish(files, image, request)
+        def transfer(source, subject):
+            self.assertIs(source, files)
+            self.assertIs(subject, image)
+            root = v.json_bytes(files['oci/index.json'])['manifests'][0]
+            index = v.json_bytes(files[r.OCI_BLOB_PREFIX + v.parse_digest(root['digest'])])
+            for descriptor in [root, *index['manifests']]:
+                manifests[descriptor['digest']] = files[r.OCI_BLOB_PREFIX + v.parse_digest(descriptor['digest'])]
+            for descriptor in index['manifests']:
+                manifest = v.json_bytes(manifests[descriptor['digest']])
+                for blob in [manifest['config'], *manifest['layers']]:
+                    stored[blob['digest']] = files[r.OCI_BLOB_PREFIX + v.parse_digest(blob['digest'])]
+        result = r.publish(files, image, request, transfer=transfer)
         self.assertEqual(result, image['index_digest'])
         for method, _, data, _ in calls:
             if method == 'PUT': self.assertIn(data, files.values())
+        self.assertFalse(any(method == 'POST' or '/blobs/uploads/' in path for method, path, *_ in calls))
         original_calls = len(calls)
-        r.publish(files, image, request)
+        r.publish(files, image, request, transfer=transfer)
         self.assertFalse(any(method in ('PUT', 'POST') for method, *_ in calls[original_calls:]))
         manifests['0.1.0'] = b'other-image'
-        with self.assertRaises(v.VerificationError): r.publish(files, image, request)
+        with self.assertRaises(v.VerificationError): r.publish(files, image, request, transfer=transfer)
 
-    def test_upload_location_never_forwards_registry_credentials(self):
-        self.assertEqual(r.upload_path('https://ghcr.io/v2/ryther/ha-wolf-manager/blobs/uploads/id?state=a'),
-                         '/v2/ryther/ha-wolf-manager/blobs/uploads/id?state=a')
-        for url in ['https://attacker.invalid/upload', 'http://ghcr.io/v2/ryther/ha-wolf-manager/blobs/uploads/id',
-                    '/v2/other/blobs/uploads/id', '//attacker.invalid/upload',
-                    'https://user:pass@ghcr.io/v2/ryther/ha-wolf-manager/blobs/uploads/id']:
-            with self.subTest(url=url), self.assertRaises(v.VerificationError): r.upload_path(url)
+    def test_bulk_copy_tag_conflict_is_refused_before_any_tag_write(self):
+        files, _, _, _, receipt = fixture()
+        image = receipt['image']; calls = []; copied = []
+        def request(method, path, data=None, media=None):
+            calls.append((method, path))
+            self.assertEqual(method, 'GET')
+            self.assertEqual(path, r.PREFIX + 'manifests/' + image['tag'])
+            if not copied:
+                return 404, {}, b''
+            return 200, {'Docker-Content-Digest': 'sha256:' + v.sha256(b'conflicting-image')}, b'conflicting-image'
+        def transfer(source, subject):
+            self.assertIs(source, files)
+            self.assertIs(subject, image)
+            copied.append(True)
+        with self.assertRaisesRegex(v.VerificationError, '^registry_tag_rebind$'):
+            r.publish(files, image, request, transfer=transfer)
+        self.assertEqual(copied, [True])
+        self.assertEqual(len(calls), 2)
+
+    def test_existing_conflict_refuses_before_bulk_transfer(self):
+        files, _, _, _, receipt = fixture()
+        transfer = MagicMock()
+        request = MagicMock(return_value=(200, {'Docker-Content-Digest': 'sha256:' + v.sha256(b'other')}, b'other'))
+        with self.assertRaisesRegex(v.VerificationError, '^registry_tag_rebind$'):
+            r.publish(files, receipt['image'], request, transfer=transfer)
+        transfer.assert_not_called()
+
+    def test_failed_bulk_transfer_cannot_write_version_tag(self):
+        files, _, _, _, receipt = fixture()
+        request = MagicMock(return_value=(404, {}, b''))
+        transfer = MagicMock(side_effect=v.VerificationError('oci_copy_failed'))
+        with self.assertRaisesRegex(v.VerificationError, '^oci_copy_failed$'):
+            r.publish(files, receipt['image'], request, transfer=transfer)
+        self.assertEqual(request.call_count, 1)
+
+    def test_bulk_success_cannot_certify_missing_remote_graph(self):
+        files, _, _, _, receipt = fixture()
+        image = receipt['image']; writes = []
+        root = v.json_bytes(files['oci/index.json'])['manifests'][0]
+        expected = files[r.OCI_BLOB_PREFIX + v.parse_digest(root['digest'])]
+        def request(method, path, data=None, media=None):
+            if method == 'PUT':
+                writes.append(path)
+                self.fail('incomplete copy must not bind a release tag')
+            if path.endswith('/' + image['tag']):
+                return 404, {}, b''
+            if path.endswith('/' + root['digest']):
+                return 200, {'Docker-Content-Digest': root['digest']}, expected
+            return 404, {}, b''
+        transfer = MagicMock()
+        with self.assertRaises(v.VerificationError):
+            r.publish(files, image, request, transfer=transfer)
+        transfer.assert_called_once_with(files, image)
+        self.assertEqual(writes, [])
 
     def test_native_http_refusals_retain_only_closed_phase_and_status(self):
         import secrets

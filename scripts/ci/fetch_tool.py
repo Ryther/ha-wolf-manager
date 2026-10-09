@@ -1,4 +1,4 @@
-"""Fetch the allowlisted scanner release and verify its upstream checksum."""
+"""Fetch an allowlisted CI tool release and verify its pinned upstream checksum."""
 import io
 import argparse
 from pathlib import Path
@@ -7,6 +7,8 @@ import urllib.request
 from scripts.ci import verify_candidate as v
 
 TOOLS = {
+    'oras': ('https://github.com/oras-project/oras/releases/download/v1.3.4/oras_1.3.4_linux_amd64.tar.gz',
+             'f27adb935022d94df8dc77719c322dda592c78a0d57a6f7dcdd8d900b248c454'),
     'gitleaks': ('https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz',
                  '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb'),
     'actionlint': ('https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz',

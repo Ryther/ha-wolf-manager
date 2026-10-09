@@ -81,6 +81,25 @@ class PublisherTests(unittest.TestCase):
                 patch.object(p.r, 'verify_public'):
             return p.publish(self.authority, prepared, self.output)
 
+    def test_standard_transfer_failure_preserves_draft_and_has_no_asset_writes(self):
+        import importlib
+        adapter = importlib.import_module('scripts.ci.oci_transfer')
+        prepared, writes = self.publishing_fixture()
+        captured = []
+        def protected_publish(files, image, request, *, transfer):
+            captured.append((files, image))
+            transfer(files, image)
+            self.fail('failed transfer returned successfully')
+        with patch.dict(os.environ, {'GITHUB_ACTOR': 'fixture'}), patch.object(p.r, 'Registry'), \
+                patch.object(p.r, 'publish', side_effect=protected_publish), \
+                patch.object(adapter, 'transfer', side_effect=v.VerificationError('oci_copy_failed')) as copy:
+            with self.assertRaisesRegex(v.VerificationError, '^oci_copy_failed$'):
+                p.publish(self.authority, prepared, self.output)
+        self.assertEqual(len(captured), 1)
+        copy.assert_called_once_with(captured[0][0], captured[0][1], 'fixture', self.authority.token)
+        self.assertEqual(writes, [])
+        self.assertIs(self.releases[0]['draft'], True)
+
     def test_final_transition_preserves_explicit_tag_and_exact_commit_despite_native_omission(self):
         prepared, writes = self.publishing_fixture(native_omission=True)
         publication = self.run_publish(prepared)

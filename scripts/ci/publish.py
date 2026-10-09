@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 import urllib.parse
 import urllib.request
-from scripts.ci import artifacts as a, producer as p, registry as r, verify_candidate as v
+from scripts.ci import artifacts as a, oci_transfer, producer as p, registry as r, verify_candidate as v
 
 
 class GitHub(v.GitHubAuthority):
@@ -99,7 +99,9 @@ def publish(authority, prepared, output):
     _, files = v.bundle_files(candidate_path)
     receipt_raw = (output / RECEIPT_FILE).read_bytes(); receipt = v.json_bytes(receipt_raw)
     registry = r.Registry(os.environ['GITHUB_ACTOR'], authority.token)
-    digest = r.publish(files, receipt['image'], registry.request)
+    digest = r.publish(files, receipt['image'], registry.request,
+        transfer=lambda original_files, original_image: oci_transfer.transfer(
+            original_files, original_image, os.environ['GITHUB_ACTOR'], authority.token))
     assets = {entry['name']: files[entry['name']] for entry in receipt['assets']}
     assets[RECEIPT_FILE] = receipt_raw
     assets['release-verification.json'] = (output / 'verification.json').read_bytes()
@@ -165,7 +167,9 @@ REGISTRY_REFUSALS = frozenset({
     'registry_start_upload', 'registry_blob_upload', 'registry_blob_identity',
     'registry_manifest_identity', 'registry_manifest_status', 'registry_manifest_upload',
     'registry_subject', 'registry_tag_rebind', 'registry_tag_status',
-    'registry_public_manifest_identity', 'registry_public_subject', 'registry_public_blob_identity'})
+    'registry_public_manifest_identity', 'registry_public_subject', 'registry_public_blob_identity',
+    'oci_tool_identity', 'oci_phase', 'oci_timeout', 'oci_unavailable', 'oci_login_failed',
+    'oci_copy_failed', 'oci_subject', 'oci_layout_path', 'oci_credentials'})
 
 
 def refusal_message(error):
