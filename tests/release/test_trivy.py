@@ -129,3 +129,38 @@ class TrivyTests(unittest.TestCase):
                     if mutation == 'parent-link':
                         (root / 'oci').unlink(); (root / 'real-oci').rename(root / 'oci')
                     else: victim.unlink(); victim.write_bytes(old)
+
+    def test_actual_cli_select_then_verify_both_platforms_and_refuse_cross_scan(self):
+        import io
+        import json
+        from unittest.mock import patch
+        previous = Path.cwd()
+        self.addCleanup(os.chdir, previous)
+        with tempfile.TemporaryDirectory() as directory:
+            os.chdir(directory)
+            Path('_tmp').mkdir(mode=0o700)
+            source = Path('_tmp/candidate'); source.mkdir(mode=0o700)
+            for name, data in self.files.items():
+                if name.startswith('oci/') or name == 'image.json':
+                    target = source / name; target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(data)
+            original = {path: path.read_bytes() for path in source.rglob('*') if path.is_file()}
+            for architecture in ('amd64', 'arm64'):
+                output = Path('_tmp/' + architecture)
+                with patch.object(sys, 'argv', ['trivy_gate', 'select', '--candidate', str(source),
+                    '--architecture', architecture, '--output', str(output)]):
+                    t.main()
+                self.assertEqual(json.loads((output / 'index.json').read_bytes())['manifests'][0]['platform']['architecture'], architecture)
+                Path('_tmp/reports').mkdir(mode=0o700, exist_ok=True)
+                report = Path('_tmp/reports/report-' + architecture + '.json')
+                report.write_bytes(encoded(self.report(architecture)))
+                argv = ['trivy_gate', 'verify', '--candidate', str(source), '--architecture', architecture, '--report', str(report)]
+                with patch.object(sys, 'argv', argv), patch('sys.stdout', new_callable=io.StringIO) as stdout:
+                    t.main()
+                self.assertEqual(json.loads(stdout.getvalue())['architecture'], architecture)
+                report.write_bytes(encoded(self.report('arm64' if architecture == 'amd64' else 'amd64')))
+                with patch.object(sys, 'argv', argv), patch('sys.stderr', new_callable=io.StringIO) as stderr:
+                    with self.assertRaises(SystemExit) as refused: t.main()
+                self.assertEqual(refused.exception.code, 1)
+                self.assertIn('No candidate bytes were changed', stderr.getvalue())
+            self.assertEqual({path: path.read_bytes() for path in original}, original)

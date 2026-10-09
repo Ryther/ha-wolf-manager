@@ -15,6 +15,11 @@ CLOUD = 'https://sonarcloud.io'
 SERVER = ContextVar('sonar_server', default=CLOUD)
 TOKEN = ContextVar('sonar_token', default=None)
 COMMUNITY = 'http://127.0.0.1:9000'
+MIN_PROJECT_COVERAGE = 90
+MIN_COMPONENT_COVERAGE = 85
+RUST_CRATES = ('wolf-core', 'wolf-host', 'wolf-manager')
+COVERED_LINES = 'covered_lines'
+EXECUTABLE_LINES = 'executable_lines'
 
 
 @contextmanager
@@ -218,8 +223,42 @@ def project_coverage(project):
     coverage = float(measures.get('coverage', 'nan'))
     lines = int(measures.get('lines_to_cover', '0'))
     v.require(math.isfinite(coverage) and 0 <= coverage <= 100 and lines > 0, 'sonar_imported_coverage')
-    v.require(coverage >= 80, 'sonar_project_coverage_below_80')
+    v.require(coverage >= MIN_PROJECT_COVERAGE, 'sonar_project_coverage_below_90')
     return coverage, lines
+
+
+def coverage_component_entry(source, counts, language):
+    v.require(isinstance(source, str) and isinstance(counts, (tuple, list))
+              and len(counts) == 2 and all(type(value) is int for value in counts),
+              'sonar_component_counts')
+    total, missed = counts
+    v.require(total > 0 and 0 <= missed <= total, 'sonar_component_counts')
+    if language == 'rust':
+        parts = source.split('/')
+        v.require(len(parts) >= 4 and parts[0] == 'crates' and parts[1] in RUST_CRATES
+                  and parts[2] == 'src', 'sonar_component_source')
+        return parts[1], total, total - missed
+    return language, total, total - missed
+
+
+def component_coverage(expected_rust, expected_js, expected_python):
+    result = {name: {COVERED_LINES: 0, EXECUTABLE_LINES: 0}
+              for name in (*RUST_CRATES, 'javascript', 'python')}
+    for language, files in (('rust', expected_rust), ('javascript', expected_js),
+                            ('python', expected_python)):
+        v.require(isinstance(files, dict), 'sonar_component_counts')
+        for source, counts in files.items():
+            group, total, covered = coverage_component_entry(source, counts, language)
+            result[group][COVERED_LINES] += covered
+            result[group][EXECUTABLE_LINES] += total
+    for counts in result.values():
+        v.require(counts[EXECUTABLE_LINES] > 0, 'sonar_component_missing')
+        v.require(100 * counts[COVERED_LINES] >= MIN_COMPONENT_COVERAGE * counts[EXECUTABLE_LINES],
+                  'sonar_component_coverage_below_85')
+    covered = sum(counts[COVERED_LINES] for counts in result.values())
+    executable = sum(counts[EXECUTABLE_LINES] for counts in result.values())
+    v.require(100 * covered >= MIN_PROJECT_COVERAGE * executable, 'sonar_exact_coverage_below_90')
+    return result
 
 
 def mixed_imports(project, javascript_path, python_path):
@@ -239,6 +278,9 @@ def verify(task_path, project, sha, lcov_path=None, javascript_path=None, python
     imported = {}
     if javascript_path is not None or python_path is not None:
         imported = mixed_imports(project, javascript_path, python_path)
+        expected_js, _ = rust_lcov(javascript_path, 'js')
+        expected_python, _ = python_xml(python_path)
+        imported['component_coverage'] = component_coverage(expected_rust, expected_js, expected_python)
     # A concurrent newer analysis invalidates these project-level measurements.
     latest = get('/api/project_analyses/search?project=' + urllib.parse.quote(project, safe='') + '&ps=1')
     v.require(len(latest.get('analyses', [])) == 1 and latest['analyses'][0].get('key') == analysis_id,

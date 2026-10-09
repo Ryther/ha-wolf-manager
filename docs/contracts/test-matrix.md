@@ -146,6 +146,7 @@ failure restarts. These runtime checks complement the measured fixture execution
 they are not instrumented GPU/Moonlight tests.
 
 The checked-in CI independently regenerates all three reports for trusted
-candidates, enforces at least 80% combined coverage and verifies exact report
+candidates, enforces at least 90% combined coverage and an 85% floor for each
+Rust crate, JavaScript and Python separately, and verifies exact report
 imports and analysis revision. A successful local Community analysis cannot
 substitute for the required live SonarCloud analysis of a release candidate.

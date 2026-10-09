@@ -78,27 +78,32 @@ class SonarCoverageTests(unittest.TestCase):
             return original(path)
         with patch.object(s,'get',paged):
             self.assertEqual(s.verify(self.task,'example',SHA,self.lcov)['rust_covered_lines'],1)
-    def test_overall_project_below_eighty_is_refused_even_with_imported_rust(self):
+    def test_overall_project_below_ninety_is_refused_even_with_imported_rust(self):
         self.components = [self.rust]
         original = self.api
         def low(path):
             if path.startswith('/api/measures/component?'):
                 return {'component': {'measures': [
-                    {'metric': 'coverage', 'value': '79.9'},
+                    {'metric': 'coverage', 'value': '89.99'},
                     {'metric': 'lines_to_cover', 'value': '1000'}]}}
             return original(path)
         with patch.object(s, 'get', low), self.assertRaises(v.VerificationError):
             s.verify(self.task, 'example', SHA, self.lcov)
 
     def test_each_mixed_language_report_must_be_imported_exactly(self):
+        paths = ['crates/wolf-core/src/lib.rs', 'crates/wolf-host/src/lib.rs',
+                 'crates/wolf-manager/src/lib.rs']
+        self.lcov.write_text(''.join('SF:' + path + '\nDA:1,3\nend_of_record\n' for path in paths))
         javascript = self.root / 'javascript.lcov'
-        javascript.write_text('SF:web/app.js\nDA:1,3\nDA:2,0\nend_of_record\n')
+        javascript.write_text('SF:web/app.js\nDA:1,3\nend_of_record\n')
         python = self.root / 'python.xml'
-        python.write_text('<coverage><packages><package><classes><class filename="sonar_gate.py">'
-                          '<lines><line number="1" hits="1"/><line number="2" hits="0"/>'
-                          '</lines></class></classes></package></packages></coverage>')
-        self.components = [self.rust, dict(self.rust, path='web/app.js', language='js'),
-                           dict(self.rust, path='scripts/ci/sonar_gate.py', language='py')]
+        python.write_text('<coverage><class filename="sonar_gate.py"><lines>'
+                          '<line number="1" hits="1"/></lines></class></coverage>')
+        measures = [{'metric': 'lines_to_cover', 'value': '1'},
+                    {'metric': 'uncovered_lines', 'value': '0'}]
+        self.components = [dict(self.rust, path=path, measures=measures) for path in paths]
+        self.components += [dict(self.rust, path='web/app.js', language='js', measures=measures),
+                            dict(self.rust, path='scripts/ci/sonar_gate.py', language='py', measures=measures)]
         with patch.object(s, 'get', self.api):
             result = s.verify(self.task, 'example', SHA, self.lcov, javascript, python)
         self.assertEqual(result['javascript_covered_lines'], 1)
@@ -106,6 +111,77 @@ class SonarCoverageTests(unittest.TestCase):
         self.components.pop()
         with patch.object(s, 'get', self.api), self.assertRaises(v.VerificationError):
             s.verify(self.task, 'example', SHA, self.lcov, javascript, python)
+
+    def test_full_verifier_refuses_low_manager_despite_exact_imports_and_high_projection(self):
+        paths = ['crates/wolf-core/src/lib.rs', 'crates/wolf-host/src/lib.rs',
+                 'crates/wolf-manager/src/lib.rs', 'web/app.js', 'scripts/ci/sonar_gate.py']
+        def record(path, covered):
+            return 'SF:' + path + '\n' + ''.join(
+                'DA:' + str(line) + ',' + str(int(line <= covered)) + '\n'
+                for line in range(1, 101)) + 'end_of_record\n'
+        self.lcov.write_text(''.join(record(path, 84 if index == 2 else 100)
+                                   for index, path in enumerate(paths[:3])))
+        javascript = self.root / 'javascript.lcov'
+        javascript.write_text(record(paths[3], 100))
+        python = self.root / 'python.xml'
+        python.write_text('<coverage><class filename="sonar_gate.py"><lines>' + ''.join(
+            '<line number="' + str(line) + '" hits="1"/>' for line in range(1, 101))
+            + '</lines></class></coverage>')
+        self.components = [dict(self.rust, path=path, language=language, measures=[
+            {'metric': 'lines_to_cover', 'value': '100'},
+            {'metric': 'uncovered_lines', 'value': '16' if index == 2 else '0'}])
+            for index, (path, language) in enumerate(zip(paths, ['rust'] * 3 + ['js', 'py']))]
+        with patch.object(s, 'get', self.api), self.assertRaisesRegex(
+                v.VerificationError, 'sonar_component_coverage_below_85'):
+            s.verify(self.task, 'example', SHA, self.lcov, javascript, python)
+
+    def coverage_groups(self, counts=None):
+        counts = counts or [(100, 90)] * 5
+        paths = ['crates/wolf-core/src/lib.rs', 'crates/wolf-host/src/lib.rs',
+                 'crates/wolf-manager/src/lib.rs', 'web/app.js', 'scripts/ci/sonar_gate.py']
+        groups = [{path: (value[0], value[0] - value[1])} for path, value in zip(paths, counts)]
+        return {**groups[0], **groups[1], **groups[2]}, groups[3], groups[4]
+
+    def test_component_floor_refuses_manager_hidden_by_high_aggregate(self):
+        groups = self.coverage_groups([(10000, 10000), (10000, 10000),
+                                      (10000, 8499), (10000, 10000), (10000, 10000)])
+        with self.assertRaises(v.VerificationError):
+            s.component_coverage(*groups)
+
+    def test_component_coverage_requires_every_crate_and_both_languages(self):
+        rust_paths = ['crates/wolf-core/src/lib.rs', 'crates/wolf-host/src/lib.rs',
+                      'crates/wolf-manager/src/lib.rs']
+        for missing in range(5):
+            groups = self.coverage_groups()
+            if missing < 3:
+                groups[0].pop(rust_paths[missing])
+            else:
+                groups[missing - 2].clear()
+            with self.subTest(missing=missing), self.assertRaises(v.VerificationError):
+                s.component_coverage(*groups)
+
+    def test_component_counts_refuse_zero_boolean_negative_and_foreign_inputs(self):
+        for invalid in [(0, 0), (True, 0), (100, True), (100, -1), (100, 101)]:
+            groups = self.coverage_groups()
+            groups[0]['crates/wolf-manager/src/lib.rs'] = invalid
+            with self.subTest(invalid=invalid), self.assertRaises(v.VerificationError):
+                s.component_coverage(*groups)
+        groups = self.coverage_groups()
+        groups[0]['crates/foreign/src/lib.rs'] = (100, 0)
+        with self.assertRaises(v.VerificationError):
+            s.component_coverage(*groups)
+
+    def test_exact_component_and_combined_boundaries_accept_integer_counts(self):
+        groups = self.coverage_groups([(100, 85), (100, 90), (100, 90), (100, 90), (100, 95)])
+        result = s.component_coverage(*groups)
+        self.assertEqual(set(result), {'wolf-core', 'wolf-host', 'wolf-manager', 'javascript', 'python'})
+        self.assertEqual(result['wolf-core'], {'covered_lines': 85, 'executable_lines': 100})
+        self.assertEqual(sum(row['covered_lines'] for row in result.values()), 450)
+
+    def test_unrounded_combined_below_ninety_never_borrows_rounded_metric(self):
+        groups = self.coverage_groups([(10000, 9000)] * 4 + [(10000, 8999)])
+        with self.assertRaises(v.VerificationError):
+            s.component_coverage(*groups)
 
     def test_python_report_duplicate_or_traversal_lines_are_refused(self):
         python = self.root / 'python.xml'

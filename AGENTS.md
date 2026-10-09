@@ -63,7 +63,8 @@ not measure browser or Python execution. Measure release scripts with the pinned
 coverage.py and `scripts/ci/python_coverage.ini`; collect real Chromium/Node V8
 execution through `WOLF_UI_COVERAGE=1 npm run test:ui` and
 `scripts/ci/browser_coverage.cjs`. Candidate publication requires imported
-coverage for every measured language and at least 80% combined project coverage.
+coverage for every measured language, at least 90% combined project coverage,
+and at least 85% for each Rust crate, JavaScript and Python separately.
 Line coverage does not establish crash safety or branch coverage.
 
 Run focused meaningful checks during development and affected required checks
