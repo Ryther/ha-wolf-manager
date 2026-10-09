@@ -17,6 +17,7 @@ PREFIX = '/v2/ryther/ha-wolf-manager/'
 
 MANIFEST_PATH = 'manifests/'
 BLOB_PATH = 'blobs/'
+BLOB_UPLOAD_PATH = 'blobs/uploads/'
 
 OCI_BLOB_PREFIX = 'oci/blobs/sha256/'
 
@@ -40,8 +41,8 @@ def request_phase(method, path):
     if method == 'GET' and relative.startswith(MANIFEST_PATH):
         return 'manifest-read' if relative.startswith(MANIFEST_PATH + 'sha256:') else 'tag-read'
     for verb, prefix, phase in (('HEAD', BLOB_PATH, 'blob-read'),
-                               ('POST', 'blobs/uploads/', 'blob-start'),
-                               ('PUT', 'blobs/uploads/', 'blob-upload'),
+                               ('POST', BLOB_UPLOAD_PATH, 'blob-start'),
+                               ('PUT', BLOB_UPLOAD_PATH, 'blob-upload'),
                                ('PUT', MANIFEST_PATH, 'manifest-upload')):
         if method == verb and relative.startswith(prefix):
             return phase
@@ -53,7 +54,7 @@ def upload_path(url):
     v.require(not parsed.fragment and not parsed.username and not parsed.password
               and (not parsed.netloc and not parsed.scheme or
                    parsed.scheme == 'https' and parsed.netloc == 'ghcr.io')
-              and parsed.path.startswith(PREFIX + 'blobs/uploads/')
+              and parsed.path.startswith(PREFIX + BLOB_UPLOAD_PATH)
               and '..' not in parsed.path and '\\' not in parsed.path
               and '\r' not in url and '\n' not in url, 'registry_upload_origin')
     return parsed.path + ('?' + parsed.query if parsed.query else '')
@@ -126,7 +127,7 @@ def transfer_blob(files, descriptor, request, done):
     data = files[OCI_BLOB_PREFIX + v.parse_digest(digest)]
     status, headers, _ = request('HEAD', PREFIX + BLOB_PATH + digest)
     if status == 404:
-        status, headers, _ = request('POST', PREFIX + 'blobs/uploads/', b'', 'application/octet-stream')
+        status, headers, _ = request('POST', PREFIX + BLOB_UPLOAD_PATH, b'', 'application/octet-stream')
         v.require(status == 202, 'registry_start_upload')
         location = upload_path(header(headers, 'Location'))
         location += ('&' if '?' in location else '?') + 'digest=' + urllib.parse.quote(digest, safe='')
