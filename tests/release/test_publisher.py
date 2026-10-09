@@ -70,7 +70,7 @@ class PublisherTests(unittest.TestCase):
             if native_omission:
                 # Native API observed omission: a draft update without tag_name loses its association.
                 response['tag_name'] = value.get('tag_name', 'untagged-native-omission')
-                response['target_commitish'] = value.get('target_commitish', 'main')
+                response['target_commitish'] = value.get('target_commitish', SHA)
             return mutate(response) if mutate else response
         self.authority.write = write
         return prepared, writes
