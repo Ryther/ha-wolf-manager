@@ -145,7 +145,7 @@ class SupervisorCodeqlTests(unittest.TestCase):
                 self.assertEqual(source.read_bytes(), SOURCE_BYTES)
 
     def test_source_descriptor_authority_refuses_aliases_unsafe_mode_and_size(self):
-        for mutation in ('hardlink', 'parent_symlink', 'world_writable', 'fifo', 'oversize'):
+        for mutation in ('hardlink', 'parent_symlink', 'world_writable', 'unsafe_parent', 'fifo', 'oversize'):
             with self.subTest(mutation=mutation), source_fixture() as source:
                 if mutation == 'hardlink':
                     alias = source.parent / 'alias.rs'
@@ -155,13 +155,18 @@ class SupervisorCodeqlTests(unittest.TestCase):
                     source.parent.rename(real_parent)
                     source.parent.symlink_to(real_parent, target_is_directory=True)
                 elif mutation == 'world_writable': source.chmod(0o666)
+                elif mutation == 'unsafe_parent': source.parent.chmod(0o777)
                 elif mutation == 'fifo':
                     source.unlink()
                     os.mkfifo(source)
                 else: source.write_bytes(SOURCE_BYTES + b'x' * (16 * 1024))
+                parent_metadata = source.parent.lstat()
                 metadata = source.lstat()
                 before = None if mutation == 'fifo' else source.read_bytes()
                 with self.assertRaises(v.VerificationError): check(reviewed_report())
+                parent_after = source.parent.lstat()
+                self.assertEqual((parent_after.st_ino, parent_after.st_mode, parent_after.st_nlink),
+                                 (parent_metadata.st_ino, parent_metadata.st_mode, parent_metadata.st_nlink))
                 after = source.lstat()
                 self.assertEqual((after.st_ino, after.st_mode, after.st_nlink),
                                  (metadata.st_ino, metadata.st_mode, metadata.st_nlink))
