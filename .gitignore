@@ -384,3 +384,5 @@
 !/tests/release/test_security_commands.py
 !/tests/release/test_workflow_trust.py
 !/tests/release/test_host_diagnostics.py
+!/scripts/ci/trivy_gate.py
+!/tests/release/test_trivy.py

@@ -47,6 +47,14 @@ class WorkflowReuseTests(unittest.TestCase):
             commands = '\n'.join(step.get('run', '') for step in scan['steps'])
             self.assertIn('--exit-code 0 --format sarif', commands)
             self.assertIn('--exit-code 1 --format json', commands)
+            select = 'scripts.ci.trivy_gate select --candidate _tmp/subject --architecture ' + arch
+            verify = 'scripts.ci.trivy_gate verify --candidate _tmp/subject --architecture ' + arch
+            receipt = 'scripts.ci.producer report --name image-scan-' + arch
+            self.assertIn(select, commands)
+            self.assertIn('$PWD/_tmp/scan-' + arch + ',target=/candidate,readonly', commands)
+            self.assertNotIn('$PWD/_tmp/subject/oci,target=/candidate', commands)
+            self.assertLess(commands.index(select), commands.index('docker run'))
+            self.assertLess(commands.index(verify), commands.index(receipt))
         self.assertNotIn('scripts.ci.artifacts', yaml.safe_dump(data))
 
     def test_failure_logs_and_source_checks_are_always_preserved(self):

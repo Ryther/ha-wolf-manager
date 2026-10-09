@@ -646,15 +646,19 @@ jobs:
     - run: |-
         mkdir -p _tmp/evidence
         python -m scripts.ci.check_subject --bundle _tmp/subject --sha "$CANDIDATE_SHA" > _tmp/evidence/subject-binding.json
+    - name: Select exact original amd64 manifest
+      run: python -m scripts.ci.trivy_gate select --candidate _tmp/subject --architecture amd64 --output _tmp/scan-amd64
     - name: Retain raw image findings
-      run: docker run --rm --mount "type=bind,source=$PWD/_tmp/subject/oci,target=/candidate,readonly" --mount "type=bind,source=$PWD/_tmp/evidence,target=/reports"
+      run: docker run --rm --mount "type=bind,source=$PWD/_tmp/scan-amd64,target=/candidate,readonly" --mount "type=bind,source=$PWD/_tmp/evidence,target=/reports"
         ghcr.io/aquasecurity/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa
         image --input /candidate --platform linux/amd64 --scanners vuln --severity HIGH,CRITICAL --exit-code 0 --format
         sarif --output /reports/trivy-amd64.sarif
-    - run: docker run --rm --mount "type=bind,source=$PWD/_tmp/subject/oci,target=/candidate,readonly" --mount "type=bind,source=$PWD/_tmp/evidence,target=/reports"
+    - run: docker run --rm --mount "type=bind,source=$PWD/_tmp/scan-amd64,target=/candidate,readonly" --mount "type=bind,source=$PWD/_tmp/evidence,target=/reports"
         ghcr.io/aquasecurity/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa
         image --input /candidate --platform linux/amd64 --scanners vuln --severity HIGH,CRITICAL --exit-code 1 --format
         json --output /reports/trivy-amd64.json
+    - name: Verify scanned image identity and severity
+      run: python -m scripts.ci.trivy_gate verify --candidate _tmp/subject --architecture amd64 --report _tmp/evidence/trivy-amd64.json
     - run: python -m scripts.ci.producer report --name image-scan-amd64 --sha "$CANDIDATE_SHA" --scope "Frozen candidate
         bytes and source SHA; image-scan-amd64" --output _tmp/evidence/image-scan-amd64.json
     - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
@@ -694,15 +698,19 @@ jobs:
     - run: |-
         mkdir -p _tmp/evidence
         python -m scripts.ci.check_subject --bundle _tmp/subject --sha "$CANDIDATE_SHA" > _tmp/evidence/subject-binding.json
+    - name: Select exact original arm64 manifest
+      run: python -m scripts.ci.trivy_gate select --candidate _tmp/subject --architecture arm64 --output _tmp/scan-arm64
     - name: Retain raw image findings
-      run: docker run --rm --mount "type=bind,source=$PWD/_tmp/subject/oci,target=/candidate,readonly" --mount "type=bind,source=$PWD/_tmp/evidence,target=/reports"
+      run: docker run --rm --mount "type=bind,source=$PWD/_tmp/scan-arm64,target=/candidate,readonly" --mount "type=bind,source=$PWD/_tmp/evidence,target=/reports"
         ghcr.io/aquasecurity/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa
         image --input /candidate --platform linux/arm64 --scanners vuln --severity HIGH,CRITICAL --exit-code 0 --format
         sarif --output /reports/trivy-arm64.sarif
-    - run: docker run --rm --mount "type=bind,source=$PWD/_tmp/subject/oci,target=/candidate,readonly" --mount "type=bind,source=$PWD/_tmp/evidence,target=/reports"
+    - run: docker run --rm --mount "type=bind,source=$PWD/_tmp/scan-arm64,target=/candidate,readonly" --mount "type=bind,source=$PWD/_tmp/evidence,target=/reports"
         ghcr.io/aquasecurity/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa
         image --input /candidate --platform linux/arm64 --scanners vuln --severity HIGH,CRITICAL --exit-code 1 --format
         json --output /reports/trivy-arm64.json
+    - name: Verify scanned image identity and severity
+      run: python -m scripts.ci.trivy_gate verify --candidate _tmp/subject --architecture arm64 --report _tmp/evidence/trivy-arm64.json
     - run: python -m scripts.ci.producer report --name image-scan-arm64 --sha "$CANDIDATE_SHA" --scope "Frozen candidate
         bytes and source SHA; image-scan-arm64" --output _tmp/evidence/image-scan-arm64.json
     - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9

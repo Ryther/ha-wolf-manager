@@ -30,6 +30,13 @@ image without separate access arrangements.
 
 Configure the Sonar project's intended coverage/security policy and disable automatic analysis if it would race the CI analysis. Rust LCOV, actual browser/Node JavaScript LCOV, Python coverage XML and pre-generated Clippy reports are imported by the reusable Sonar workflow. The receiver checks actual per-file metrics for all three languages against the frozen reports, the exact commit and unchanged analysis ID, and refuses combined project coverage below 80%. Generic positive project coverage cannot substitute for verified report ingestion. A real first run must confirm project permissions and importer behavior.
 
+Each image scan uses a private single-platform OCI index referencing the exact
+original manifest, config and layer bytes. The publishable multi-platform layout
+remains unchanged. Both the scan job and the independent receiver require the
+raw Trivy report to identify the expected config digest, Linux OS and architecture,
+and reject HIGH or CRITICAL findings. A successful job or receipt alone cannot
+prove that the intended platform was scanned.
+
 The root `sonar-project.properties` owns the project identity, source scope,
 exclusions, report paths and scanner quality-gate settings. CI supplies only the
 server URL, secret token and exact revision/version dynamically. Never put tokens

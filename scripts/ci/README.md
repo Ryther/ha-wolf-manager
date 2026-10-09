@@ -70,6 +70,14 @@ blobs under `oci/blobs/sha256/`. The top-level OCI layout index references one
 OCI image index containing exactly linux/amd64 and linux/arm64 manifests. Every
 reachable index/manifest/config/layer digest and size is checked locally.
 
+`trivy_gate.py select` creates a guarded private OCI layout for one architecture
+using those original blobs. It never modifies the publishable layout. Its
+`verify` command and the independent receiver require both canonical raw JSON
+reports to identify the exact platform config digest, Linux OS and architecture,
+and refuse HIGH/CRITICAL vulnerabilities. The receiver reads
+`reports/image-scan-<architecture>/trivy-<architecture>.json` from the original
+GitHub ZIP; successful check receipts cannot replace these reports.
+
 Finalize `release-receipt.json` separately **after** artifact upload: embedding a
 receipt that includes its containing ZIP hash would create a circular hash.
 Receipt assets add `workflow_artifact_id` and `workflow_artifact_sha256`; checks

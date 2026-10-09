@@ -77,6 +77,14 @@ def fixture():
     run={'id':99,'workflow_id':77,'head_sha':SHA,'head_branch':'main','path':'.github/workflows/ci.yaml@main','event':'push','status':'completed','conclusion':'success','run_attempt':1,'repository':{'id':1,'full_name':REPO,'fork':False},'head_repository':{'id':1,'full_name':REPO,'fork':False},'pull_requests':[]}
     jobs=[{'id':i+1,'run_id':99,'head_sha':SHA,'name':JOB_NAMES[name],'status':'completed','conclusion':'success','run_attempt':1} for i,name in enumerate(CHECKS)]
     receipt={'schema_version':1,'candidate_sha':SHA,'version':'0.1.0','workflow_run_id':99,'source_repository':REPO,'target_triples':['x86_64-unknown-linux-musl','aarch64-unknown-linux-musl'],'checks':[{'name':name,'result':'success','candidate_sha':SHA,'scope':'candidate '+name,'evidence_location':'artifact:42/evidence/'+name+'.json'} for name in CHECKS], 'assets':[], 'image':{'repository':'ghcr.io/ryther/ha-wolf-manager','tag':'0.1.0','index_digest':index['digest'],'platforms':[{'os':'linux','architecture':d['platform']['architecture'],'digest':d['digest']} for d in platforms]},'addon':{'slug':'ha_wolf_manager','version':'0.1.0','image_reference':'ghcr.io/ryther/ha-wolf-manager:0.1.0'},'publication_state':'draft'}
+    files['image.json'] = encoded(receipt['image'])
+    for platform in platforms:
+        architecture = platform['platform']['architecture']
+        manifest = v.json_bytes(files['oci/blobs/sha256/' + platform['digest'][7:]])
+        files['reports/image-scan-' + architecture + '/trivy-' + architecture + '.json'] = encoded({
+            'SchemaVersion': 2, 'ArtifactType': 'container_image',
+            'Metadata': {'ImageID': manifest['config']['digest'],
+                         'ImageConfig': {'architecture': architecture, 'os': 'linux'}}})
     return files,expected,run,jobs,receipt
 
 class CandidateTests(unittest.TestCase):
@@ -122,6 +130,34 @@ class CandidateTests(unittest.TestCase):
     def rejected(self,change):
         artifacts=self.package();change()
         with self.assertRaises(v.VerificationError):self.verify(artifacts)
+    def test_raw_scan_missing_malformed_or_high_cannot_be_certified_by_receipt(self):
+        for mutation in ('missing', 'malformed', 'high', 'critical'):
+            with self.subTest(mutation=mutation):
+                self.setUp()
+                name = 'reports/image-scan-arm64/trivy-arm64.json'
+                if mutation == 'missing': del self.files[name]
+                elif mutation == 'malformed': self.files[name] = b'{}'
+                else:
+                    report = v.json_bytes(self.files[name])
+                    report['Results'] = [{'Vulnerabilities': [{'Severity': mutation.upper()}]}]
+                    self.files[name] = encoded(report)
+                artifacts = self.package()
+                with self.assertRaises(v.VerificationError): self.verify(artifacts)
+
+    def test_refuses_arm_scan_of_amd_config_despite_successful_jobs(self):
+        index = v.json_bytes(self.files['oci/blobs/sha256/' + self.receipt['image']['index_digest'][7:]])
+        amd = next(p for p in index['manifests'] if p['platform']['architecture'] == 'amd64')
+        manifest = v.json_bytes(self.files['oci/blobs/sha256/' + amd['digest'][7:]])
+        report = encoded({'SchemaVersion': 2, 'ArtifactType': 'container_image',
+                          'Metadata': {'ImageID': manifest['config']['digest'],
+                                       'ImageConfig': {'architecture': 'amd64', 'os': 'linux'}},
+                          'Results': []})
+        for arch in ('amd64', 'arm64'):
+            self.files['reports/image-scan-' + arch + '/trivy-' + arch + '.json'] = report
+        artifacts = self.package()
+        with self.assertRaises(v.VerificationError):
+            self.verify(artifacts)
+
     def test_accepts_exact_candidate_with_independent_success_and_preserved_bytes(self):
         artifacts=self.package();raw=encoded(self.receipt);result=self.verify(artifacts,raw)
         self.assertIsInstance(result,dict);self.assertEqual(result['receipt_sha256'],digest(raw));self.assertEqual(result['candidate_sha'],SHA)
