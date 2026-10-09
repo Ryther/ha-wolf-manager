@@ -130,7 +130,7 @@ class SupervisorCodeqlTests(unittest.TestCase):
             self.assertEqual(source.read_bytes(), SOURCE_BYTES)
 
     def test_nearby_decimal_severity_is_not_the_reviewed_value(self):
-        for severity in ('8.1000000000000001', '8.0999999999999999'):
+        for severity in ('8.1000000000000001', '8.0999999999999999', '8.10', 8.1):
             with self.subTest(severity=severity), source_fixture() as source:
                 report = reviewed_report()
                 rule = report['runs'][0]['tool']['extensions'][0]['rules'][0]

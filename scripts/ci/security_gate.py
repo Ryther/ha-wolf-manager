@@ -126,8 +126,9 @@ def reviewed_supervisor_source():
             os.close(descriptor)
 
 
-def reviewed_supervisor_finding(tool, rule, result, severity, level):
-    if (rule['id'] != 'rust/non-https-url' or severity != Decimal('8.1') or level != 'warning'
+def reviewed_supervisor_finding(tool, rule, result, level):
+    if (rule['id'] != 'rust/non-https-url'
+            or rule.get('properties', {}).get('security-severity') != '8.1' or level != 'warning'
             or tool['driver']['name'] != 'CodeQL'
             or component_for(tool, rule_reference(result).get('toolComponent', {}))['name']
             != 'codeql/rust-queries'):
@@ -157,7 +158,7 @@ def check_result(tool, result):
     level = result.get('level', defaults.get('level', 'warning'))
     v.require(level in ('none', 'note', 'warning', 'error'), 'codeql_result')
     severity = security_severity(rule)
-    if reviewed_supervisor_finding(tool, rule, result, severity, level):
+    if reviewed_supervisor_finding(tool, rule, result, level):
         return 1
     v.require(severity < 7 and level != 'error', 'codeql_high_finding')
     return 0
