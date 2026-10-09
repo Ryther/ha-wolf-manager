@@ -19,7 +19,8 @@ an allowlisted event/run and trusted coordinated release metadata. Never copy
 SHA/version/run/workflow expectations out of the receipt you are validating.
 
 ```sh
-python /trusted/scripts/ci/verify_candidate.py \
+cd /trusted
+python -m scripts.ci.verify_candidate \
   --receipt /candidate/release-receipt.json \
   --artifacts /candidate/preserved-zip-downloads \
   --repository Ryther/ha-wolf-manager \
