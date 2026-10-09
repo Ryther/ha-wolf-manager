@@ -316,5 +316,5 @@
       }else throw new Error('Invalid deployment mode.');
     }catch(e){main.setAttribute('aria-busy','false');notice(e.message,true);main.replaceChildren(button('Retry connection',start));}
   }
-  start();
+  void start();
 })();

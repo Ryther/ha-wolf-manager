@@ -42,6 +42,14 @@ class. Unknown exception content is omitted, including signed URLs, tokens and
 raw transport errors. It never retries an identity or digest refusal or treats
 an unavailable artifact as successful evidence.
 
+Producer and Sonar CLI output paths must be relative paths beneath `_tmp/`.
+The output writer rejects symlinks, hard-linked files, special files and unsafe
+ownership or permissions. It writes files through guarded directory descriptors
+and atomic replacement. A failed tree write can retain partial private output;
+retry with a fresh output directory. A failure after replacement can leave the
+complete new file. This confinement does not isolate malicious processes that
+share the same user ID or have root privileges.
+
 ## Producer handoff
 
 The allowlisted successful candidate run must expose one immutable workflow

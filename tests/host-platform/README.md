@@ -41,12 +41,36 @@ streaming or live Home Assistant behavior. Container results must be labeled
 **container-only** in compatibility documentation.
 
 Results and bounded failure logs are written under ignored `_tmp/host-platform/`.
+Each distribution retains at most 1 MiB of combined command output and a separate
+1 MiB setup log. Results record the failed stage, controlled error code, timeout,
+cleanup outcome and discarded-byte counts. Timeout output remains available;
+truncated successful evidence is refused rather than reported as a pass.
 They include resolved image digests, installed tool versions and `/etc/os-release`.
 Distribution repository state can change even with a pinned base image; compare
 recorded package versions when investigating a later difference. Refresh image
 pins only after verifying current stable releases through the listed official
 sources. Arch, CachyOS and Tumbleweed are rolling snapshots; Leap 16.1 was still
 an RC when Leap 16.0 was selected on 2026-10-08.
+
+Tumbleweed uses the official openSUSE registry's dated `20261003` tag and exact
+multiarchitecture index digest. On 2026-10-09, fresh pulls of its AMD64 and ARM64
+manifests succeeded, and the full AMD64 distribution fixture passed with
+OpenSSH 10.5p1, sudo 1.9.17p2 and systemd 261.3. ARM64 pull availability does not
+establish execution of this distribution fixture on ARM64. This six-day-old
+snapshot was selected over the observed `20261005` and `20261006` partial
+indexes, which lacked ARM64; the earlier index selected through `latest` returned
+`404 MANIFEST_UNKNOWN` to a fresh registry request even though a cached local
+image still ran successfully. The registry's [published tags](https://registry.opensuse.org/v2/opensuse/tumbleweed/tags/list)
+identify the selected dated snapshot; Docker Hub's [official project image](https://hub.docker.com/r/opensuse/tumbleweed)
+currently exposes only `latest`, so it is not a dated-tag substitute.
+
+A dated tag and digest do not guarantee indefinite upstream retention. Verify
+the index and both target manifests remotely, then explicitly pull each target
+platform before accepting an updated pin. A passing test using a cached image
+is insufficient evidence of fresh-runner availability. Package repositories
+remain rolling even when the base snapshot is fixed. The per-image
+`verified_at` records this later Tumbleweed check; the matrix's original date
+and `verified-results.json` remain historical evidence for the earlier cohort.
 
 The first release deliberately refuses pre-existing conditional `Match` blocks
 outside its exact generated fragment, including blocks reached through nested

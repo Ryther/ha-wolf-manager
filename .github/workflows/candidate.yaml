@@ -368,6 +368,14 @@ jobs:
         retention-days: 14
         compression-level: 0
         include-hidden-files: true
+    - name: Retain bounded distribution diagnostics
+      if: always()
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: distro-diagnostics-${{ github.sha }}
+        path: _tmp/host-platform
+        if-no-files-found: warn
+        retention-days: 14
     if: github.repository == 'Ryther/ha-wolf-manager' && github.ref == 'refs/heads/main'
   addon-schema:
     name: addon-schema
@@ -604,6 +612,14 @@ jobs:
     - run: |-
         test -n "$SONAR_ORGANIZATION"
         test -n "$SONAR_PROJECT_KEY"
+        python - <<'PY'
+        import os
+        from pathlib import Path
+        settings = dict(line.split('=', 1) for line in Path('sonar-project.properties').read_text().splitlines()
+                        if line and not line.startswith('#'))
+        assert settings['sonar.organization'] == os.environ['SONAR_ORGANIZATION'], 'Sonar organization configuration mismatch'
+        assert settings['sonar.projectKey'] == os.environ['SONAR_PROJECT_KEY'], 'Sonar project configuration mismatch'
+        PY
         test -s _tmp/rust-evidence/rust.lcov
         test -s _tmp/rust-evidence/clippy.json
         test -s _tmp/rust-evidence/python.xml
@@ -614,23 +630,12 @@ jobs:
     - uses: SonarSource/sonarqube-scan-action@d209202bc7d53ff1cc128f7f907dac145c9d6ae9
       env:
         SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        SONAR_HOST_URL: https://sonarcloud.io
       with:
         scannerVersion: 8.1.0.6389
         args: |-
-          -Dsonar.host.url=https://sonarcloud.io
-          -Dsonar.organization=${{ vars.SONAR_ORGANIZATION }}
-          -Dsonar.projectKey=${{ vars.SONAR_PROJECT_KEY }}
           -Dsonar.projectVersion=${{ github.sha }}
           -Dsonar.scm.revision=${{ github.sha }}
-          -Dsonar.sources=crates,web,scripts,installer
-          -Dsonar.exclusions=**/tests/**,web/tests/**,scripts/ci/addon.schema.json
-          -Dsonar.rust.lcov.reportPaths=_tmp/rust-evidence/rust.lcov
-          -Dsonar.javascript.lcov.reportPaths=_tmp/ui-evidence/javascript.lcov
-          -Dsonar.python.coverage.reportPaths=_tmp/rust-evidence/python.xml
-          -Dsonar.rust.clippy.enabled=false
-          -Dsonar.rust.clippyReport.reportPaths=_tmp/rust-evidence/clippy.json
-          -Dsonar.qualitygate.wait=true
-          -Dsonar.qualitygate.timeout=600
     - run: |-
         python -m scripts.ci.sonar_gate --task .scannerwork/report-task.txt --sha "$CANDIDATE_SHA" --project "$SONAR_PROJECT_KEY" --rust-lcov _tmp/rust-evidence/rust.lcov --javascript-lcov _tmp/ui-evidence/javascript.lcov --python-xml _tmp/rust-evidence/python.xml --output _tmp/evidence/sonar-analysis.json
       env:

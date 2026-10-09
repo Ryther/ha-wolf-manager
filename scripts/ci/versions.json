@@ -45,6 +45,16 @@
       "version": "5.0.1",
       "commit": "368f82528645a54fb793d4d04e342629a3f51346",
       "source": "https://github.com/actions/deploy-pages/releases"
+    },
+    "actions/download-artifact": {
+      "version": "8.0.2",
+      "commit": "9000827ccba6bdab643e8b6fd33ac0654aef8333",
+      "source": "https://github.com/actions/download-artifact/releases"
+    },
+    "actions/setup-python": {
+      "version": "7.0.0",
+      "commit": "5fda3b95a4ea91299a34e894583c3862153e4b97",
+      "source": "https://github.com/actions/setup-python/releases"
     }
   },
   "images": {
@@ -63,6 +73,14 @@
     "mosquitto": {
       "reference": "eclipse-mosquitto:2.1.2-alpine@sha256:38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408",
       "source": "https://mosquitto.org/download/"
+    },
+    "sonar-scanner": {
+      "reference": "sonarsource/sonar-scanner-cli@sha256:a3f4215076706c95a17a68c19322ee916e40a3acd081a8c1a1e839e0194afa57",
+      "source": "https://hub.docker.com/r/sonarsource/sonar-scanner-cli"
+    },
+    "sonarqube-community": {
+      "reference": "sonarqube:26.9.0.129388-community@sha256:c0f1160bccfa435db4168c2d7df69af3c3ea7bfeb87395613014048fb33a68c1",
+      "source": "https://hub.docker.com/_/sonarqube"
     }
   },
   "tools": {
@@ -119,6 +137,10 @@
     "v8-to-istanbul": {
       "version": "9.3.0",
       "source": "https://github.com/istanbuljs/v8-to-istanbul/releases"
+    },
+    "commitizen": {
+      "version": "4.19.2",
+      "source": "https://pypi.org/project/commitizen/"
     }
   },
   "constraints": [
