@@ -95,47 +95,44 @@ High line coverage does not replace real OS, protocol-ordering, crash-safety or
 streaming checks. A configured overall-coverage gate must be reported honestly
 when it fails.
 
-Fresh reports from [GitHub PR run 37863000299](https://github.com/Ryther/ha-wolf-manager/actions/runs/37863000299),
-head `226251c` and merge subject `07c3a67`, measured
-**81.2% (12,691/15,625 executable lines)** across Rust LCOV execution records,
-Python Cobertura and JavaScript LCOV. The original candidate-subject ZIP and its
-artifact digests were independently verified before accepting the extracted
-reports and their source identity. This PR workflow does not run SonarCloud;
-fresh reports do not replace the trusted release candidate's analysis.
-
-Separately, the local SonarQube Community analysis at `1ad8661` verified exact
-per-file imports for all 52 Rust, two JavaScript and 11 Python report files,
-reported the same 81.2% overall coverage and passed its overall 80% gate. It had
-no unresolved findings, reported bugs, vulnerabilities or security hotspots.
-This local result does not establish absence of defects or certify a later SHA.
+The local container preflight on 2026-10-09 measured the source bytes committed
+at `6ca015d`. Fresh Rust profiles, browser/Node V8 execution and Python Cobertura
+reports covered **14,750/16,144 executable lines (91.37%)**. This local result
+verifies the tested source bytes; it does not certify a later commit or replace
+the required hosted checks and exact SonarCloud release analysis.
 
 | Component | Covered / executable lines | Line coverage |
 | --- | ---: | ---: |
-| Rust workspace | 11,142 / 13,904 | 80.14% |
-| Core contracts | 660 / 700 | 94.29% |
-| Host toolkit | 6,066 / 7,325 | 82.81% |
-| Manager | 4,416 / 5,879 | 75.11% |
-| Python release tooling | 1,185 / 1,346 | 88.04% |
+| Combined reports | 14,750 / 16,144 | 91.37% |
+| Rust workspace | 12,595 / 13,904 | 90.59% |
+| Core contracts | 672 / 700 | 96.00% |
+| Host toolkit | 6,583 / 7,325 | 89.87% |
+| Manager | 5,340 / 5,879 | 90.83% |
+| Python release tooling | 1,791 / 1,865 | 96.03% |
 | Browser and Node coverage converter | 364 / 375 | 97.07% |
 
-The fresh PR execution passed 84 Python release tests and 34 Chromium browser
-journeys, including keyboard/mobile controls, stale revisions,
-authentication expiry, unknown observations and confirmed stopped hosts. V8
-execution includes the Node converter itself; imported coverage is not generated
-from an inventory of unexecuted code.
+The preflight passed 262 Rust tests: 236 workspace tests, six explicit private
+broker cases and 20 explicitly selected disposable root fixtures. Formatting
+and strict workspace Clippy passed, as did 187 Python release tests, 34 Chromium
+browser journeys and the strict documentation build. Browser execution covers
+keyboard/mobile controls, stale revisions, authentication expiry and unknown
+observations; it uses API fixtures and does not prove live streaming. V8
+execution includes the Node converter itself.
 
-Fresh Rust execution in that PR run passed 242 tests: 220 standard tests and all
-22 explicitly selected broker/root cases; strict workspace Clippy passed. LLVM
-summary coverage was **78.89% (11,558/14,650 lines)**; its accounting differs from
-the encoded LCOV execution-line denominator above. Neither report measures
-branch coverage.
-Integration-test files are excluded from the Rust
-source report; inline test modules remain included. The executable denominator
-therefore includes those inline tests and is not a production-only metric.
-Vendored third-party source is excluded from owned product coverage.
-Installer line coverage was 87.9%, coordinator 94.6%, SSH 94.0% and authentication
-93.9%. Manager CLI/bootstrap and failure branches still have uncovered lines;
-coverage is not a claim that every runtime path has been exercised.
+New native process tests exercise authenticated manager configuration, offline
+recovery, stale import refusal, MQTT readiness and drained shutdown. Host tests
+exercise cached-image startup after registry failure, pairing preservation,
+journal reconciliation without replay, overlay recovery and guarded installer
+preview. A FIFO bootstrap-secret regression proves bounded refusal while valid
+regular secret files remain accepted.
+
+The Rust values above use LCOV execution-line records, not the distinct LLVM
+summary line/region denominator. Integration-test files are excluded from the
+Rust source report; inline test modules remain included. This is therefore not a
+production-only denominator. Vendored third-party source is excluded from owned
+product coverage. No new product exclusions were added to raise these values.
+Line coverage does not measure branch coverage, crash safety or every failure
+ordering; remaining uncovered lines and direct-OS/GPU validation still matter.
 
 The isolated HA app retained byte-exact cold backups, ownership and modes during
 updates. Native toolkit upgrades retained guarded preview/apply/activate plans
