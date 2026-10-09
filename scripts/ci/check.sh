@@ -44,6 +44,8 @@ case "$check" in
         WOLF_TEST_NATIVE_VALIDATORS=1 cargo llvm-cov --locked --no-report -p wolf-manager-host --lib -- --ignored --test-threads=1
         cargo llvm-cov --locked --no-report -p wolf-manager-host --test host_steam -- --ignored --exact policy_adapter_overlays_userdata_and_library_aliases_then_restores_pairing_safely
         cargo llvm-cov --locked --no-report -p ha-wolf-manager --test ha_bootstrap -- --ignored --exact native_supervisor_get_only_bearer_bounded_response_and_failure
+        cargo llvm-cov --locked --no-report -p ha-wolf-manager --test cli_runtime -- --ignored --exact root_addon_startup_preserves_existing_state_and_admits_only_fresh_options
+        WOLF_TEST_CLI_RUNTIME=1 cargo llvm-cov --locked --no-report -p wolf-manager-host --test cli_runtime -- --ignored --test-threads=1
         chown -R "$(stat -c %u .):$(stat -c %g .)" target "$CARGO_HOME"
       '
     printf 'listener 18889\nallow_anonymous true\npersistence false\n' > _tmp/coverage-mqtt.conf
@@ -64,6 +66,7 @@ while True:
         time.sleep(0.1)
 PYREADY
     cargo llvm-cov --locked --no-report -p ha-wolf-manager --test mqtt -- --ignored
+    cargo llvm-cov --locked --no-report -p ha-wolf-manager --test cli_runtime -- --ignored --exact live_broker_runtime_becomes_ready_and_drains_on_sigterm
     cargo llvm-cov --locked --no-report -p wolf-manager-host --test catalog_daemon -- --ignored --exact actual_broker_birth_scan_concurrency_and_graceful_offline
     cargo llvm-cov report --locked --workspace --ignore-filename-regex '/tests/' --lcov --output-path _tmp/evidence/rust.lcov
     cargo clippy --locked --workspace --all-targets --message-format=json > _tmp/evidence/clippy.json

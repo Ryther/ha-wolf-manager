@@ -113,6 +113,7 @@
 !/crates/wolf-host/tests/catalog.rs
 !/crates/wolf-host/tests/catalog_daemon.rs
 !/crates/wolf-host/tests/catalog_mqtt.rs
+!/crates/wolf-host/tests/cli_runtime.rs
 !/crates/wolf-host/tests/cli.rs
 !/crates/wolf-host/tests/defaults.rs
 !/crates/wolf-host/tests/dispatcher.rs
@@ -164,6 +165,7 @@
 !/crates/wolf-manager/tests/candidate/mqtt.rs
 !/crates/wolf-manager/tests/candidate/ssh.rs
 !/crates/wolf-manager/tests/coordinator.rs
+!/crates/wolf-manager/tests/cli_runtime.rs
 !/crates/wolf-manager/tests/fixtures/README.md
 !/crates/wolf-manager/tests/fixtures/tls-cert.pem
 !/crates/wolf-manager/tests/fixtures/tls-key.pem

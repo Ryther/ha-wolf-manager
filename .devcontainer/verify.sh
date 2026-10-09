@@ -19,6 +19,7 @@ cargo fmt --all -- --check
 CARGO_BUILD_JOBS=2 cargo clippy --locked --workspace --all-targets -- -D warnings
 CARGO_BUILD_JOBS=2 cargo test --locked --workspace
 CARGO_BUILD_JOBS=2 cargo test --locked -p ha-wolf-manager --test mqtt -- --ignored
+CARGO_BUILD_JOBS=2 cargo test --locked -p ha-wolf-manager --test cli_runtime -- --ignored --exact live_broker_runtime_becomes_ready_and_drains_on_sigterm
 CARGO_BUILD_JOBS=2 cargo test --locked -p wolf-manager-host --test catalog_daemon -- --ignored --exact actual_broker_birth_scan_concurrency_and_graceful_offline
 npm ci --ignore-scripts
 npm run test:ui -- --workers=1
