@@ -2,6 +2,11 @@
 
 [Documentation home](index.md) · [Next: operate the PC](operations.md)
 
+> **Before applying a host plan:** this AI-generated, experimental toolkit can
+> change Wolf/Steam files and root-controlled services. Tests do not guarantee a
+> safe result. Keep independent backups and exercise install/adopt in a disposable
+> environment before granting it important data.
+
 ## Record the existing storage first
 
 Use a local administrator console. You need systemd, OpenSSH server, sudo, Docker with Compose, a working GPU/device setup, and Steam initialized under the intended non-root UID/GID. Prepare the network/firewall independently. The toolkit does not require Ansible or install these prerequisites for you. Direct-OS and native streaming compatibility must be checked separately from distribution container tests.

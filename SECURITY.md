@@ -16,6 +16,6 @@ Backups contain secrets and require private custody. Failed recovery, uncertain 
 
 ## Release evidence
 
-This initial public implementation must complete real release gates before a production-ready release is claimed. Once versions are published, prefer the newest verified release and review its notes for security fixes; older versions are not automatically supported indefinitely. An issue may also affect the current development branch, which is not a substitute for a published artifact.
+This is an experimental AI-generated implementation. Passing tests, reviews or release gates does not guarantee safety or correctness. If no public release is listed, there is no published version to install. Once versions are published, prefer the newest verified release and review its notes for security fixes; older versions are not automatically supported indefinitely. An issue may also affect the current development branch, which is not a substitute for a published artifact.
 
 Candidate checks cover dependencies, secrets, source analysis, immutable artifacts and image scans. The protected publisher verifies independently retrieved workflow/job/artifact/tag identities and transfers verified bytes without rebuilding. Weekly rescans examine the published image digest for newly disclosed HIGH/CRITICAL findings. A successful historical scan does not guarantee absence of future vulnerabilities. See the [release runbook](docs/guides/releases.md) for verification and the external settings required before publication.

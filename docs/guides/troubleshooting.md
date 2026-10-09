@@ -46,3 +46,48 @@ Native TLS certificate/CA inputs are bounded at 1 MiB and must be regular, singl
 Steam writer detection examines processes for the authorized UID. A native process name beginning with `steam` (case insensitive) is conservatively treated as a writer even if its executable was omitted from policy. Declared helper executable identities are also checked. If restoration/staging reports an active writer, exit those processes and retry the explicit operation; do not weaken the policy or erase preimages.
 
 Host-generated app icons are cached as validated PNG files inside the authorized Wolf configuration mapping. Fetching/decoding is bounded, with a shared 20-second budget and a fallback image if the CDN cannot supply a valid cover. Existing valid cache entries are retained rather than refreshed automatically. An invalid or unauthorized existing cache entry is rejected, not overwritten. A missing/old cover therefore does not establish that a game or its catalog is missing. Investigate the recorded configuration mount and cache ownership while preserving its contents.
+
+## Report a problem safely
+
+After checking the relevant symptom, report a reproducible problem in
+[GitHub Issues](https://github.com/Ryther/ha-wolf-manager/issues). Include:
+
+- Manager and host-toolkit versions, image digest when relevant, deployment mode,
+  OS/architecture and whether the environment is a container or installed OS.
+- The intended action and actual result, observed timestamp/availability and
+  sanitized Desired/Staged/Running revisions and operation ID.
+- The fixed error code and a short reviewed log excerpt around the failure,
+  plus reproduction steps on disposable data when possible.
+- What was actually checked: manager health, SSH enrollment/connection, broker
+  discovery, host container state or streaming are different observations.
+
+Redact credentials, private keys, account/endpoint details, game/library paths
+and launch options. Never attach raw RPC/MQTT payloads, databases or backup
+bundles. A generated diagnostic snapshot is still private administrative data;
+review it before sharing. Suspected vulnerabilities belong in the
+[private security-reporting process](https://github.com/Ryther/ha-wolf-manager/blob/main/SECURITY.md),
+not a public issue with exploit details.
+
+## Stop or remove a deployment
+
+Stopping or removing the manager does not send a Wolf Stop request to each PC.
+The host toolkit and its services are independently installed. If you intend to
+stop a gaming service, finish its session, use **Stop**, and check the operation
+outcome, actual PC state and any Steam-restoration condition first. Preserve
+uncertain-operation journals and transaction preimages; deleting the manager
+cannot reconcile them or restore changed Steam files.
+
+Before removing the standalone container or add-on, take and verify the matching
+manager backup and separate Steam/Wolf/host backups described in
+[backup and recovery](backup-recovery.md). Retain manager data and private SSH
+identities if you want to enroll the same manager again. Add-on removal can remove
+its local data, so preserve the cold Supervisor backup before that step.
+For standalone Compose, `docker compose stop wolf-manager` stops the process
+while retaining its bind-mounted data; do not delete those directories as part
+of troubleshooting or assume recreating a container restores a backup.
+
+For a host installation rollback, use the retained reviewed plan and guarded
+`install-rollback` procedure in [host installation](host-installation.md).
+There is no general automatic uninstall/Steam restore when the manager is
+removed. If rollback refuses changed identities or files, retain the evidence
+and investigate instead of force-removing policy, configuration or backups.

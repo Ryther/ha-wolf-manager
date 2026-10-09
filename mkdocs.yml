@@ -33,6 +33,7 @@ nav:
       - Choose a deployment: guides/index.md
       - Home Assistant: guides/home-assistant.md
       - Standalone Docker: guides/standalone.md
+      - Compatibility and evidence: contracts/test-matrix.md
       - Install or adopt a PC: guides/host-installation.md
   - Operate:
       - Controls and games: guides/operations.md
@@ -49,6 +50,5 @@ nav:
       - SSH and MQTT: contracts/integration-contract.md
       - Runtime: contracts/runtime-contract.md
       - Recovery: contracts/recovery-contract.md
-      - Test matrix: contracts/test-matrix.md
       - Install and release: contracts/rollout-contract.md
   - Release: guides/releases.md

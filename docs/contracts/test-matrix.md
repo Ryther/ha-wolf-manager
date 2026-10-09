@@ -95,26 +95,33 @@ High line coverage does not replace real OS, protocol-ordering, crash-safety or
 streaming checks. A configured overall-coverage gate must be reported honestly
 when it fails.
 
-The local container preflight on 2026-10-09 used frozen source reports from fresh
-Rust profiles, browser/Node V8 execution and Python Cobertura. After a narrow
-Python-only recheck, these covered **14,751/16,145 executable lines (91.37%)**.
-This local result verifies the tested source bytes; it does not certify a later
-commit or replace the required hosted checks and exact SonarCloud release analysis.
+The latest local Community analysis verified **14,872/16,241 executable lines
+(91.57%)** at source revision
+[`3b44e4d`](https://github.com/Ryther/ha-wolf-manager/commit/3b44e4d88dfc00eb65bede46c65002afa5000ed8).
+All 70 expected source-file imports matched their reports; the analysis had zero
+issues and zero hotspots. Rust and browser reports came from successful hosted
+[CI run 37950429116](https://github.com/Ryther/ha-wolf-manager/actions/runs/37950429116)
+at [`82664d6`](https://github.com/Ryther/ha-wolf-manager/commit/82664d68b881610e29f28bed6c11eabf894df1c9)
+and were reused only after proving every corresponding code and report-generation
+input byte-identical. Python execution was freshly measured at `3b44e4d`.
+This verifies that scoped source snapshot and its imported reports; it is not a
+new SonarCloud result or release certification for a later commit.
 
 | Component | Covered / executable lines | Line coverage |
 | --- | ---: | ---: |
-| Combined reports | 14,751 / 16,145 | 91.37% |
-| Rust workspace | 12,595 / 13,904 | 90.59% |
+| Combined reports | 14,872 / 16,241 | 91.57% |
+| Rust workspace | 12,617 / 13,904 | 90.74% |
 | Core contracts | 672 / 700 | 96.00% |
-| Host toolkit | 6,583 / 7,325 | 89.87% |
-| Manager | 5,340 / 5,879 | 90.83% |
-| Python release tooling | 1,792 / 1,866 | 96.03% |
+| Host toolkit | 6,604 / 7,325 | 90.16% |
+| Manager | 5,341 / 5,879 | 90.85% |
+| Python release tooling | 1,891 / 1,962 | 96.38% |
 | Browser and Node coverage converter | 364 / 375 | 97.07% |
 
-The preflight passed 262 Rust tests: 236 workspace tests, six explicit private
-broker cases and 20 explicitly selected disposable root fixtures. Formatting
-and strict workspace Clippy passed, as did 187 Python release tests, 34 Chromium
-browser journeys and the strict documentation build. Browser execution covers
+The referenced hosted execution passed 262 Rust tests: 236 workspace tests, six
+explicit private broker cases and 20 explicitly selected disposable root fixtures.
+Formatting and strict workspace Clippy also passed. Its browser report records
+34 Chromium journeys; the fresh local Python recheck passed 208 release tests.
+The strict documentation build passed. Browser execution covers
 keyboard/mobile controls, stale revisions, authentication expiry and unknown
 observations; it uses API fixtures and does not prove live streaming. V8
 execution includes the Node converter itself.
@@ -126,9 +133,9 @@ journal reconciliation without replay, overlay recovery and guarded installer
 preview. A FIFO bootstrap-secret regression proves bounded refusal while valid
 regular secret files remain accepted.
 
-The Rust values above use LCOV execution-line records. The same native execution
-produced an LLVM summary of **13,055/14,650 lines (89.11%)**, with a distinct
-line/region denominator; these values must not be combined or interchanged.
+The Rust values above use LCOV executable-line records. LLVM line/region summary
+counters have a distinct denominator; do not combine or interchange those values
+with the imported LCOV counts.
 Integration-test files are excluded from the Rust source report; inline test
 modules remain included. This is therefore not a production-only denominator. Vendored third-party source is excluded from owned
 product coverage. No new product exclusions were added to raise these values.

@@ -30,6 +30,12 @@ for local artifacts, not a second implementation tree.
 Keep the README honest about development status, AI-generated code, executed
 checks and compatibility limits. Update this file when its commands or contracts
 change.
+Keep the explicit AI-generated-code warning immediately below the README title
+and prominently on the documentation home and add-on entry pages. Explain the
+actual host/data permissions, independent backups and disposable first use;
+tests and reviews do not guarantee safety or correctness. Keep first-use guides,
+current interface captures and compatibility limits easy to find before
+development and release internals.
 
 ## Development and verification
 

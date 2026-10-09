@@ -7,6 +7,12 @@ Describe the concrete trigger and the behavior after this change.
 - Exact commands and results:
 - Environment/commit tested:
 - Simulated, container-only or native/live limits:
+- User-visible steps, screenshots and affected guide/skill updates:
+
+For a user journey change, describe the disposable environment, observed UI
+outcome and relevant retained-byte checks. For documentation changes, record
+the strict build and desktop/narrow-screen walkthrough. Review diagnostics and
+screenshots before sharing them; exclude credentials and household details.
 
 ## State and compatibility
 
