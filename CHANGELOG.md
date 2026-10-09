@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/Ryther/ha-wolf-manager/compare/v0.1.0...v0.1.1) (2026-10-09)
+
+
+### Bug Fixes
+
+* **ci:** bind image scans to exact platform manifests ([3a69120](https://github.com/Ryther/ha-wolf-manager/commit/3a691202e5921b63a17044223821519b8463d5fd))
+
 ## 0.1.0 (2026-10-09)
 
 
