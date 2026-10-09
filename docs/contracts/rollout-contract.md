@@ -6,7 +6,7 @@ The Rust host binary performs install/adopt preflight and emits a preview before
 
 ## Authored producer and output
 
-Source owner: this repository. Producer: Cargo.toml/Cargo.lock, crates/, web/, Dockerfile, wolf_manager/config.yaml, installer/, scripts/ci/ and .github/workflows/{candidate,publish,pull-request,release-please}.yaml. Input: immutable candidate Git SHA with one coordinated version and locked dependencies. All Rust crates inherit workspace.package.version. The runtime Dockerfile uses FROM scratch and copies exact prebuilt static binaries without recompilation. Native startup briefly prepares an empty Supervisor /data volume, then clears supplementary groups and drops every real/effective/saved UID/GID to 1000 before starting Tokio. Existing state must already have safe ownership/modes; startup never recursively changes ownership. Entrypoint and healthcheck use exec-form native commands. Build/test environments may contain tools.
+Source owner: this repository. Producer: Cargo.toml/Cargo.lock, crates/, web/, Dockerfile, wolf_manager/config.yaml, installer/, scripts/ci/ and .github/workflows/{ci,tests,sonar,codeql,commits,release,security,docs}.yaml. Input: immutable candidate Git SHA with one coordinated version and locked dependencies. All Rust crates inherit workspace.package.version. The runtime Dockerfile uses FROM scratch and copies exact prebuilt static binaries without recompilation. Native startup briefly prepares an empty Supervisor /data volume, then clears supplementary groups and drops every real/effective/saved UID/GID to 1000 before starting Tokio. Existing state must already have safe ownership/modes; startup never recursively changes ownership. Entrypoint and healthcheck use exec-form native commands. Build/test environments may contain tools.
 
 Outputs:
 - ghcr.io/ryther/ha-wolf-manager:<version>, OCI index containing linux/amd64 and linux/arm64.
@@ -18,9 +18,9 @@ Addon config: slug ha_wolf_manager, coordinated version, arch [amd64,aarch64], i
 
 ## Exact candidate and receipt
 
-An unprivileged build job produces archives and an OCI layout; test and scan those bytes. A separate trusted serialized publish job downloads the exact run artifacts, executes only trusted verifier code, verifies hashes/digests/receipt, transfers the same OCI blobs/manifests with digest preservation, uploads assets to a resumable draft, verifies remote identity, then publishes. No privileged rebuild. If transfer tooling changes bytes, repeat validation and bind the actual published digests before publication. Select and verify the transfer tool version from official sources at implementation time. Publication never executes candidate scripts with credentials.
+An unprivileged build job produces archives and an OCI layout; test and scan those bytes. A separate trusted serialized publish job downloads the exact run artifacts, executes only trusted verifier code, verifies hashes/digests/receipt, transfers the same OCI blobs/manifests with digest preservation, uploads assets to a resumable draft, verifies remote identity, then publishes. No privileged rebuild. If transfer tooling changes bytes, refuse publication; the tested digests cannot be rebound to a rebuild. Select and verify the transfer tool version from official sources at implementation time. Publication never executes candidate scripts with credentials.
 
-Receipt v1 fields: schema_version:1, candidate_sha (40 hex), version, workflow_run_id, source_repository, target_triples, checks [{name,result,candidate_sha}], assets [{name,download_url,sha256,size_bytes}], image {repository,tag,index_digest,platforms:[{os,architecture,digest}]}, addon {slug,version,image_reference}, publication_state (draft/published). All identities refer to one SHA/version. Required successful check names: rust, auth-ingress, ssh-policy, persistence, mqtt, lifecycle, ui, distro-containers, static-amd64, static-arm64, addon-schema, codeql, secrets, cargo-audit, image-scan-amd64, image-scan-arm64, sonar. Each check records its scope and evidence location. Refuse missing/duplicate names, unsupported receipt version, wrong identity, malformed archives, checksum/size/digest mismatch, or absent platforms. Receipt proves pipeline identity; it is not an independent signature of an untrusted publisher.
+Receipt v1 fields: schema_version:1, candidate_sha (40 hex), version, workflow_run_id, source_repository, target_triples, checks [{name,result,candidate_sha}], assets [{name,download_url,sha256,size_bytes}], image {repository,tag,index_digest,platforms:[{os,architecture,digest}]}, addon {slug,version,image_reference}, publication_state (draft; published state belongs in a separate publication record). All identities refer to one SHA/version. Required successful check names: rust, auth-ingress, ssh-policy, persistence, mqtt, lifecycle, ui, distro-containers, static-amd64, static-arm64, addon-schema, codeql, secrets, cargo-audit, image-scan-amd64, image-scan-arm64, sonar, docs, workflow-lint, commits. Each check records its scope and evidence location. Refuse missing/duplicate names, unsupported receipt version, wrong identity, malformed archives, checksum/size/digest mismatch, or absent platforms. Receipt proves pipeline identity; it is not an independent signature of an untrusted publisher.
 
 Release Please is the sole version authority, using the simple release strategy with version.txt, CHANGELOG.md, a TOML extra-file updater for $.workspace.package.version and YAML updater for wolf_manager/config.yaml $.version. Initial coordinated public version is 0.1.0. The empty initial release manifest plus initial-version:0.1.0 represents an unreleased project. An actual compiled updater fixture verifies first-release behavior, all owned Cargo.lock package versions, inherited Cargo fields, npm metadata and add-on version. Cargo.lock predicates use @.name.value because the bundled TOML parser wraps scalar names. The latest stable Action bundles an older core library; the fixture intentionally matches that library, as recorded in scripts/ci/versions.json. Authority: https://github.com/googleapis/release-please/blob/main/docs/customizing.md and docs/manifest-releaser.md. No competing Commitizen version bump job.
 
@@ -43,3 +43,38 @@ The trusted verifier independently selects exactly one artifact named `release-c
 ## Matched offline manager recovery
 
 A manager backup contains a consistent SQLite database, accounts, host-key pins, initialized marker and exact private SSH keys with a closed checksum manifest. TLS files and Supervisor options are external configuration. Restore preview makes no writes. Restore stages a verified complete directory and uses atomic exchange, retaining the previous directory for rollback. A mounted /data directory cannot be exchanged: refuse with unchanged bytes, restore to an alternate protected directory or volume, then explicitly remap storage while offline. Never partially copy into live data. Pending SQLite sidecars, unsupported/newer schema, corrupt keys or unsafe paths/modes require guarded recovery rather than automatic replacement.
+
+
+## Canonical CI and reusable authority
+
+`.github/workflows/ci.yaml` is the only publication producer. It calls reusable
+Tests, CodeQL and Sonar workflows on the exact source SHA; PR runs remain
+check-only. Main publication requires 20 semantic receipt checks. Tests checks
+map to the exact GitHub job `tests / <key>`; exceptions are `codeql / codeql`,
+`sonar / Sonar Cloud`, and `commits / Conventional Commits`. Required keys also
+include strict `docs`, `workflow-lint` and commit validation. The
+[release guide](../guides/releases.md#inspect-the-exact-ci-artifacts) contains the
+complete closed map. Another caller prefix or duplicate semantic alias cannot
+satisfy or coexist ambiguously with a required authority.
+
+The protected Release receiver validates the configured numeric `CI_WORKFLOW_ID`,
+active canonical workflow path, owned main push/dispatch, completed successful
+run, exact SHA and current attempt. Every required job must belong to that same
+attempt; a run change during evidence collection refuses stale success. PR,
+fork, failed, skipped, cancelled, partial and in-progress producers cannot
+publish. Release Please prepares drafts separately; no publication credential
+is available while candidate build/test code executes.
+
+All PRs use isolated Community analysis without the project Cloud token; trusted
+main uses Cloud. Both routes require exact CE/analysis/revision and imported
+Rust, JavaScript and Python coverage. The required Sonar aggregate refuses an
+incorrect route, failed scanner or missing proof. Community passing does not
+replace the Cloud release gate. Always-retained scan/distro diagnostics help
+explain failures but cannot create a success report or authorize publication.
+
+Pinned same-run Actions may transfer subject artifacts between CI jobs; the
+privileged receiver still independently verifies original ZIP size/digest and
+live GitHub metadata. Publication transfers the exact tested OCI and archive
+bytes without rebuilding. New reusable job names, settings and hosted checks
+must be verified live before enabling publication; local tests and workflow
+source do not establish that transition.

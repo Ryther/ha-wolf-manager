@@ -1,0 +1,190 @@
+name: CI
+'on':
+  push:
+    branches:
+    - main
+  pull_request: {}
+  workflow_dispatch: {}
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+env:
+  CANDIDATE_SHA: ${{ github.sha }}
+jobs:
+  tests:
+    uses: ./.github/workflows/tests.yaml
+    with:
+      ref: ${{ github.sha }}
+  commits:
+    uses: ./.github/workflows/commits.yaml
+    with:
+      ref: ${{ github.sha }}
+  codeql:
+    needs:
+    - tests
+    uses: ./.github/workflows/codeql.yaml
+    with:
+      ref: ${{ github.sha }}
+      subject_artifact: candidate-subject-${{ github.sha }}
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+    if: always()
+  sonar:
+    needs:
+    - tests
+    uses: ./.github/workflows/sonar.yaml
+    with:
+      ref: ${{ github.sha }}
+    secrets:
+      SONAR_TOKEN: ${{ github.event_name != 'pull_request' && secrets.SONAR_TOKEN || '' }}
+  candidate-receipt:
+    needs:
+    - tests
+    - codeql
+    - sonar
+    - commits
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ github.sha }}
+        persist-credentials: false
+        fetch-depth: 0
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: candidate-subject-${{ github.sha }}
+        path: _tmp/final
+    - run: mkdir -p _tmp/final/evidence _tmp/final/reports
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: evidence-addon-schema-${{ github.sha }}
+        path: _tmp/final/reports/addon-schema
+    - run: cp _tmp/final/reports/addon-schema/addon-schema.json _tmp/final/evidence/addon-schema.json
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: evidence-auth-ingress-${{ github.sha }}
+        path: _tmp/final/reports/auth-ingress
+    - run: cp _tmp/final/reports/auth-ingress/auth-ingress.json _tmp/final/evidence/auth-ingress.json
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: evidence-cargo-audit-${{ github.sha }}
+        path: _tmp/final/reports/cargo-audit
+    - run: cp _tmp/final/reports/cargo-audit/cargo-audit.json _tmp/final/evidence/cargo-audit.json
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: evidence-codeql-${{ github.sha }}
+        path: _tmp/final/reports/codeql
+    - run: cp _tmp/final/reports/codeql/codeql.json _tmp/final/evidence/codeql.json
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: evidence-commits-${{ github.sha }}
+        path: _tmp/final/reports/commits
+    - run: cp _tmp/final/reports/commits/commits.json _tmp/final/evidence/commits.json
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: evidence-distro-containers-${{ github.sha }}
+        path: _tmp/final/reports/distro-containers
+    - run: cp _tmp/final/reports/distro-containers/distro-containers.json _tmp/final/evidence/distro-containers.json
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: evidence-docs-${{ github.sha }}
+        path: _tmp/final/reports/docs
+    - run: cp _tmp/final/reports/docs/docs.json _tmp/final/evidence/docs.json
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: evidence-image-scan-amd64-${{ github.sha }}
+        path: _tmp/final/reports/image-scan-amd64
+    - run: cp _tmp/final/reports/image-scan-amd64/image-scan-amd64.json _tmp/final/evidence/image-scan-amd64.json
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: evidence-image-scan-arm64-${{ github.sha }}
+        path: _tmp/final/reports/image-scan-arm64
+    - run: cp _tmp/final/reports/image-scan-arm64/image-scan-arm64.json _tmp/final/evidence/image-scan-arm64.json
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: evidence-lifecycle-${{ github.sha }}
+        path: _tmp/final/reports/lifecycle
+    - run: cp _tmp/final/reports/lifecycle/lifecycle.json _tmp/final/evidence/lifecycle.json
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: evidence-mqtt-${{ github.sha }}
+        path: _tmp/final/reports/mqtt
+    - run: cp _tmp/final/reports/mqtt/mqtt.json _tmp/final/evidence/mqtt.json
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: evidence-persistence-${{ github.sha }}
+        path: _tmp/final/reports/persistence
+    - run: cp _tmp/final/reports/persistence/persistence.json _tmp/final/evidence/persistence.json
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: evidence-rust-${{ github.sha }}
+        path: _tmp/final/reports/rust
+    - run: cp _tmp/final/reports/rust/rust.json _tmp/final/evidence/rust.json
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: evidence-secrets-${{ github.sha }}
+        path: _tmp/final/reports/secrets
+    - run: cp _tmp/final/reports/secrets/secrets.json _tmp/final/evidence/secrets.json
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: evidence-sonar-${{ github.sha }}
+        path: _tmp/final/reports/sonar
+    - run: cp _tmp/final/reports/sonar/sonar.json _tmp/final/evidence/sonar.json
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: evidence-ssh-policy-${{ github.sha }}
+        path: _tmp/final/reports/ssh-policy
+    - run: cp _tmp/final/reports/ssh-policy/ssh-policy.json _tmp/final/evidence/ssh-policy.json
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: evidence-static-amd64-${{ github.sha }}
+        path: _tmp/final/reports/static-amd64
+    - run: cp _tmp/final/reports/static-amd64/static-amd64.json _tmp/final/evidence/static-amd64.json
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: evidence-static-arm64-${{ github.sha }}
+        path: _tmp/final/reports/static-arm64
+    - run: cp _tmp/final/reports/static-arm64/static-arm64.json _tmp/final/evidence/static-arm64.json
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: evidence-ui-${{ github.sha }}
+        path: _tmp/final/reports/ui
+    - run: cp _tmp/final/reports/ui/ui.json _tmp/final/evidence/ui.json
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: evidence-workflow-lint-${{ github.sha }}
+        path: _tmp/final/reports/workflow-lint
+    - run: cp _tmp/final/reports/workflow-lint/workflow-lint.json _tmp/final/evidence/workflow-lint.json
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: release-candidate-${{ github.sha }}
+        path: _tmp/final
+        if-no-files-found: error
+        retention-days: 14
+        compression-level: 0
+        include-hidden-files: true
+    - run: python -m scripts.ci.artifacts --run-id "$GITHUB_RUN_ID" --name "release-candidate-${{ github.sha }}"
+        --output _tmp/original --extract
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+    - run: python -m scripts.ci.producer finalize --bundle _tmp/final --artifact _tmp/original.metadata.json --sha
+        "$CANDIDATE_SHA" --run-id "$GITHUB_RUN_ID" --output _tmp/release-receipt.json
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: release-receipt-${{ github.sha }}
+        path: _tmp/release-receipt.json
+        if-no-files-found: error
+        retention-days: 14
+        compression-level: 0
+        include-hidden-files: true
+    if: github.repository == 'Ryther/ha-wolf-manager' && github.ref == 'refs/heads/main' && github.event_name !=
+      'pull_request'
+    name: Verified release evidence

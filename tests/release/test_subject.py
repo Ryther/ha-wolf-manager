@@ -15,7 +15,7 @@ from test_candidate import fixture, encoded, SHA
 class SubjectTests(unittest.TestCase):
     def test_codeql_failure_retains_sarif_without_success_receipt_or_failure_bypass(self):
         root = Path(__file__).resolve().parents[2]
-        for name in ('candidate.yaml', 'pull-request.yaml'):
+        for name in ('codeql.yaml',):
             with self.subTest(workflow=name):
                 workflow = yaml.safe_load((root / '.github/workflows' / name).read_text())
                 job = workflow['jobs']['codeql']
@@ -31,7 +31,7 @@ class SubjectTests(unittest.TestCase):
                 self.assertEqual(upload['with']['path'], '_tmp/evidence')
                 self.assertLess(gate, receipt)
                 self.assertLess(receipt, len(steps) - 1)
-                self.assertNotIn('if', steps[receipt])
+                self.assertEqual(steps[receipt].get('if'), "inputs.subject_artifact != ''")
                 self.assertNotIn('continue-on-error', job)
                 self.assertTrue(all(not step.get('continue-on-error') for step in steps))
 

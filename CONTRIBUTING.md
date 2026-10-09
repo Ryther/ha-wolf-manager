@@ -21,7 +21,7 @@ python -m pip install --only-binary ':all:' -r scripts/ci/requirements.txt
 cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked --workspace
-npm ci
+npm ci --ignore-scripts
 npm run test:ui
 python -m unittest discover -s tests/release -v
 ```
@@ -37,11 +37,12 @@ Explain the concrete problem, resulting behavior and evidence in the pull reques
 Use the repository's [.cz.yaml](.cz.yaml) convention, for example `fix(ssh): reject mismatched enrolled fingerprints`. Validate the message with:
 
 ```sh
+python -m pip install --only-binary ':all:' --no-deps -r scripts/ci/commitizen-requirements.txt
 cz check --message 'fix(ssh): reject mismatched enrolled fingerprints'
 ```
 
 Release Please owns coordinated versions and changelogs. Do not run independent version bumps or update only one of Cargo, npm and add-on metadata. Dependency updates must include fresh primary-source verification, lockfile review and an explanation of intentional older constraints. See [release operations](docs/guides/releases.md).
 
-PR workflows use read permissions and no release/Sonar secrets. Their evidence cannot authorize publication. Trusted main candidates run the independent release checks, including Sonar, before the protected publisher can transfer the exact bytes. A passing source test alone does not establish that an image has been released.
+PR workflows use read permissions and no release/Sonar secrets. Their evidence cannot authorize publication. The standard CI calls reusable tests, Sonar and CodeQL workflows. All PRs use a disposable Sonar Community server. Trusted main CI requires the exact SonarCloud analysis before the protected release workflow can transfer the tested bytes. A passing source test alone does not establish that an image has been released.
 
 For suspected vulnerabilities, follow [SECURITY.md](SECURITY.md). Public issues should contain sanitized reproductions, never private keys, passwords, recovery bundles or raw database state.

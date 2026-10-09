@@ -13,7 +13,7 @@ import re
 import tomllib
 from pathlib import Path
 import tarfile
-from scripts.ci import verify_candidate as v
+from scripts.ci import evidence_output as e, verify_candidate as v
 
 REPOSITORY = 'Ryther/ha-wolf-manager'
 IMAGE = 'ghcr.io/ryther/ha-wolf-manager'
@@ -136,6 +136,7 @@ def publisher_identity(run, workflow_id, workflow_path):
     v.require(isinstance(run, dict) and run.get('event') in ('push', 'workflow_dispatch')
               and run.get('head_branch') == 'main' and run.get('status') == 'completed'
               and run.get('conclusion') == 'success' and run.get('workflow_id') == workflow_id
+              and workflow_path == v.CI_WORKFLOW and v.positive_int(run.get('run_attempt'))
               and run.get('path') in (workflow_path, workflow_path + '@main')
               and run.get('pull_requests') == [] and v.HEX40.fullmatch(run.get('head_sha', '')),
               'publisher_run')
@@ -176,6 +177,9 @@ def read_tree(path):
 
 
 def write_tree(path, files):
+    if isinstance(path, e.Output):
+        path.write_tree(files)
+        return
     path.mkdir(parents=True, exist_ok=False)
     for name, data in files.items():
         v.safe_path(name)
@@ -247,17 +251,19 @@ def main():
     finalize.add_argument('--sha', required=True); finalize.add_argument('--run-id', type=int, required=True)
     finalize.add_argument('--workflow-id', type=int); finalize.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
+    if args.command == 'metadata':
+        print(metadata(Path.cwd()))
+        return
+    output = e.Output(args.output)
     if args.command == 'merge':
         files, image = merge_oci([read_tree(args.amd64), read_tree(args.arm64)], args.version)
-        write_tree(args.output, files); (args.output / IMAGE_FILE).write_bytes(encoded(image))
+        files[IMAGE_FILE] = encoded(image)
+        output.write_tree(files)
     elif args.command == 'report':
         v.require(v.HEX40.fullmatch(args.sha), 'producer_sha')
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_bytes(encoded({'candidate_sha': args.sha, 'result': 'success', 'scope': args.scope}))
-    elif args.command == 'metadata':
-        print(metadata(Path.cwd()))
+        output.write_file(encoded({'candidate_sha': args.sha, 'result': 'success', 'scope': args.scope}))
     elif args.command == 'assemble':
-        assemble(Path.cwd(), args.amd64, args.arm64, args.output)
+        assemble(Path.cwd(), args.amd64, args.arm64, output)
     else:
         files = read_tree(args.bundle)
         reports = {name: v.json_bytes(files['evidence/' + name + '.json']) for name in v.REQUIRED_CHECKS}
@@ -267,14 +273,14 @@ def main():
             run = authority.get_json('/repos/' + REPOSITORY + '/actions/runs/' + str(args.run_id))
             v.require(run.get('id') == args.run_id and run.get('head_sha') == args.sha
                       and run.get('head_branch') == 'main' and run.get('event') in ('push', 'workflow_dispatch')
-                      and run.get('path') in ('.github/workflows/candidate.yaml', '.github/workflows/candidate.yaml@main'),
+                      and run.get('path') in (v.CI_WORKFLOW, v.CI_WORKFLOW + '@main'),
                       'producer_run_identity')
             workflow_id = run['workflow_id']
         expected = v.Expectations(REPOSITORY, args.sha, metadata(Path.cwd()), args.run_id,
-                                  workflow_id, '.github/workflows/candidate.yaml')
+                                  workflow_id, v.CI_WORKFLOW)
         result = receipt(files, reports, v.json_bytes(files[IMAGE_FILE]), expected,
                          v.json_bytes(args.artifact.read_bytes()))
-        args.output.write_bytes(encoded(result))
+        output.write_file(encoded(result))
 
 
 if __name__ == '__main__':

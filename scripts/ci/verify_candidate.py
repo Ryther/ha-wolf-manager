@@ -25,8 +25,12 @@ import zlib
 REQUIRED_CHECKS = frozenset((
     'rust', 'auth-ingress', 'ssh-policy', 'persistence', 'mqtt', 'lifecycle',
     'ui', 'distro-containers', 'static-amd64', 'static-arm64', 'addon-schema',
-    'codeql', 'secrets', 'cargo-audit', 'image-scan-amd64', 'image-scan-arm64', 'sonar',
+    'codeql', 'secrets', 'cargo-audit', 'image-scan-amd64', 'image-scan-arm64', 'sonar', 'docs', 'workflow-lint', 'commits',
 ))
+CI_WORKFLOW = '.github/workflows/ci.yaml'
+AUTHORITATIVE_JOBS = {name: 'tests / ' + name for name in REQUIRED_CHECKS}
+AUTHORITATIVE_JOBS.update(codeql='codeql / codeql', sonar='sonar / Sonar Cloud',
+                          commits='commits / Conventional Commits')
 TRIPLES = {'x86_64-unknown-linux-musl': 62, 'aarch64-unknown-linux-musl': 183}
 HOST_LICENSES = frozenset({'licenses/HA-Wolf-Manager.txt', 'licenses/rumqttc.txt'})
 HEX64 = re.compile(r'[\da-f]{64}\Z', re.ASCII)
@@ -104,7 +108,7 @@ class Expectations:
         require(isinstance(self.candidate_sha, str) and HEX40.fullmatch(self.candidate_sha), 'trusted_sha')
         require(isinstance(self.version, str) and SEMVER.fullmatch(self.version), 'trusted_version')
         require(positive_int(self.run_id) and positive_int(self.workflow_id), 'trusted_run')
-        require(re.fullmatch(r'\.github/workflows/[A-Za-z0-9_-]+\.ya?ml', self.workflow_path), 'trusted_workflow')
+        require(self.workflow_path == CI_WORKFLOW, 'trusted_workflow')
         require(self.event in ('push', 'workflow_dispatch') and self.branch == 'main', 'trusted_event')
 
 
@@ -142,6 +146,28 @@ class GitHubAuthority:
             raise VerificationError('authority_unavailable') from None
 
 
+def verify_jobs(jobs, expected, attempt):
+    names = {}
+    ids = set()
+    for job in jobs:
+        require(isinstance(job, dict) and isinstance(job.get('name'), str)
+                and positive_int(job.get('id')) and job['id'] not in ids
+                and job['name'] not in names, 'duplicate_jobs')
+        names[job['name']] = job
+        ids.add(job['id'])
+    required_names = set(AUTHORITATIVE_JOBS.values())
+    semantic_aliases = REQUIRED_CHECKS | {name.rsplit(' / ', 1)[-1] for name in required_names}
+    for name in names:
+        require(name in required_names or name.rsplit(' / ', 1)[-1] not in semantic_aliases,
+                'ambiguous_authoritative_check')
+    require(required_names <= names.keys(), 'missing_authoritative_check')
+    for name in required_names:
+        job = names[name]
+        require(job.get('run_id') == expected.run_id and job.get('head_sha') == expected.candidate_sha
+                and positive_int(job.get('run_attempt')) and job['run_attempt'] == attempt
+                and job.get('status') == 'completed' and job.get('conclusion') == 'success', 'failed_authoritative_check')
+
+
 def authority_evidence(authority, expected):
     prefix = '/repos/' + expected.repository
     run = authority.get_json(prefix + '/actions/runs/' + str(expected.run_id))
@@ -177,19 +203,9 @@ def authority_evidence(authority, expected):
             break
         require(bool(data['jobs']), 'incomplete_job_evidence')
     require(len(jobs) == total, 'incomplete_job_evidence')
-    names = {}
-    ids = set()
-    for job in jobs:
-        require(isinstance(job, dict) and isinstance(job.get('name'), str)
-                and positive_int(job.get('id')) and job['id'] not in ids
-                and job['name'] not in names, 'duplicate_jobs')
-        names[job['name']] = job
-        ids.add(job['id'])
-    require(REQUIRED_CHECKS <= names.keys(), 'missing_authoritative_check')
-    for name in REQUIRED_CHECKS:
-        job = names[name]
-        require(job.get('run_id') == expected.run_id and job.get('head_sha') == expected.candidate_sha
-                and job.get('status') == 'completed' and job.get('conclusion') == 'success', 'failed_authoritative_check')
+    verify_jobs(jobs, expected, attempt)
+    latest = authority.get_json(prefix + '/actions/runs/' + str(expected.run_id))
+    require(isinstance(latest, dict) and latest == run, 'changing_run_evidence')
     return run, workflow, jobs
 
 
