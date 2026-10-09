@@ -226,7 +226,13 @@ certifying its own completion. Its
 environment-protected receiver verification job performs read-only checks with
 `contents: write` to retrieve private drafts, and has no package write permission.
 The protected publication job repeats verification before transferring bytes through
-the closed transfer code.
+the closed transfer code. The pinned ORAS client copies the original OCI graph
+to its verified index digest, without writing a version tag. Authenticated
+post-transfer checks compare original manifest bytes and blob identities before
+the publisher binds the exact index to the coordinated tag. Early and final
+tag checks refuse a conflicting identity. Temporary login credentials use
+standard input and a private registry configuration; external client output is
+suppressed. ORAS is CI-only and does not enter either scratch runtime.
 Candidate archive contents are never executed with publication credentials.
 
 Configure and independently verify these settings before enabling publication:

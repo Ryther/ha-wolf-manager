@@ -141,12 +141,22 @@
     "commitizen": {
       "version": "4.19.2",
       "source": "https://pypi.org/project/commitizen/"
+    },
+    "oras": {
+      "version": "1.3.4",
+      "verified_at": "2026-10-09",
+      "source": "https://github.com/oras-project/oras/releases/tag/v1.3.4",
+      "archive_sha256": {
+        "linux_amd64": "f27adb935022d94df8dc77719c322dda592c78a0d57a6f7dcdd8d900b248c454",
+        "linux_arm64": "15702c6e3a4a56a8bd8ac5c17efdbcab56d9bada661ccbcf017f5b10c1d89399"
+      },
+      "constraint": "CI-only byte-preserving OCI graph copy to the original index digest. The trusted publisher separately verifies remote bytes and binds the coordinated version tag; ORAS never builds images or selects publication authority. Official binaries retain three HIGH server-path dependency advisories (GO-2026-6303, GO-2026-6609, GO-2026-6607); documented bounded review accepts only the fixed HTTPS client commands, without scanner suppression or a zero-finding claim."
     }
   },
   "constraints": [
     "Ubuntu 24.04 native public amd64/arm64 runners are deliberately selected for the established Docker/browser test environment; this is not a claim that Ubuntu 24.04 is the newest LTS.",
     "Runner-provided Python/Node/rustup/Docker are infrastructure prerequisites, not independently downloaded tool releases; selected Rust toolchain and build/scanner dependencies are explicit.",
     "The add-on community schema is vendored from frenck/action-app-linter v2.21.1 commit b9cfd1bc62ba60d2c4fc96317b5f7ada5923f4a7, retaining its MIT license. It does not prove actual Supervisor execution.",
-    "OCI publication uses Python standard library and the Distribution API; no Skopeo image is selected. The current official Skopeo image reported 1.22.3 while latest source was 1.24.1."
+    "OCI bulk publication uses the pinned official ORAS client with digest-only destinations; fixed Distribution reads and final tag binding remain independently verified by the trusted publisher. ORAS is absent from application runtimes."
   ]
 }

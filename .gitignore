@@ -237,6 +237,7 @@
 !/scripts/ci/fetch_tool.py
 !/scripts/ci/gitleaks.toml
 !/scripts/ci/native-build.sh
+!/scripts/ci/oci_transfer.py
 !/scripts/ci/producer.py
 !/scripts/ci/publish.py
 !/scripts/ci/published_subject.py
@@ -259,6 +260,7 @@
 !/tests/release/test_published_subject.py
 !/tests/release/test_publisher.py
 !/tests/release/test_registry.py
+!/tests/release/test_oci_transfer.py
 !/tests/release/test_sonar.py
 !/tests/release/test_subject.py
 !/tests/release/test_codeql_supervisor.py

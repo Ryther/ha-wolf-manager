@@ -113,6 +113,16 @@ inside the still-running producer.
 
 The publisher executes its own trusted workflow revision, never candidate archive content. It resolves the coordinated version, draft and tag independently; a fork/PR producer, wrong tag commit, missing/failed check, ambiguous artifact or altered ZIP is rejected. It uploads the original verified blobs/manifests to `ghcr.io/ryther/ha-wolf-manager` and original versioned archives/evidence to the existing GitHub draft. It performs no compilation or image rebuild. Only after remote identities and anonymous image access match does it make that draft public.
 
+Bulk image transfer uses the pinned [ORAS client](https://oras.land/docs/commands/oras_cp/)
+from the verified OCI layout to its original index digest. Copying the index
+includes both platform manifests; no platform filter or new manifest is created.
+The client cannot choose or write a version tag. The publisher checks the
+existing tag before transfer, verifies the transferred graph, and checks again
+before binding the exact index bytes to the coordinated version. A conflicting
+tag refuses publication. ORAS is a publication tool and is absent from the
+scratch application images. Its temporary registry credentials are supplied
+through standard input and kept in a private configuration directory.
+
 Review the published `release-receipt.json`, `release-verification.json` and `publication.json`, including full source SHA, run ID, checksums/sizes, image index digest and both platform digests. Use the digest from that verified record for standalone deployment. The add-on uses the coordinated version tag, so keep GHCR writers restricted and version tags immutable. Registry writes require external protection; this script cannot create a registry-wide atomic tag policy.
 
 Published releases are not mutated by automatic replays. Matching partial draft assets can be resumed; conflicting asset/tag identities refuse publication without remote deletion. Preserve the original evidence when troubleshooting.

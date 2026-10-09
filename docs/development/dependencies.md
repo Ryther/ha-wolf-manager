@@ -29,6 +29,30 @@ MkDocs 2.0 development releases are prereleases; the site uses the latest stable
 before upgrading either package. Public docs build strictly with
 `python -m mkdocs build --strict`; local planning and evidence are excluded.
 
+## OCI publication tool
+
+[ORAS 1.3.4](https://github.com/oras-project/oras/releases/tag/v1.3.4) was selected
+from the official stable release on 2026-10-09. Both Linux archive checksums are
+recorded in `scripts/ci/versions.json` and were verified against downloaded
+bytes. Native AMD64 execution copied a two-platform OCI graph to its original
+digest in a disposable registry, preserving every index, manifest, config and
+layer byte without creating a version tag. This establishes the local transfer
+contract; it does not prove GHCR authorization or public visibility. ORAS is
+used only by trusted publication tooling and is absent from scratch images.
+
+Trivy 0.75.0 detected three HIGH dependency advisories in both official binaries:
+[GO-2026-6303](https://pkg.go.dev/vuln/GO-2026-6303) concerns SSH server
+authentication, [GO-2026-6609](https://pkg.go.dev/vuln/GO-2026-6609) concerns HTTP
+file serving, and [GO-2026-6607](https://pkg.go.dev/vuln/GO-2026-6607) concerns a
+TLS server's ECH ClientHello decoding. The fixed adapter permits only registry
+login and OCI-layout copying through an HTTPS client; it starts no SSH, HTTP or
+TLS server. Review of the tagged ORAS and Go sources supports accepting this
+client use while retaining the findings. Broad TLS symbol metadata includes
+client methods, so this review is a bounded path assessment, not a formal
+reachability proof or a clean vulnerability scan. No advisory is suppressed.
+Reassess this selection when a corrected stable binary is available or the
+allowed commands change.
+
 ## Execution coverage tools
 
 `cargo-llvm-cov` 0.9.1 measures the pinned Rust toolchain. `coverage.py` 7.16.2
