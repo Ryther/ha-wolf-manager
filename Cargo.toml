@@ -1,6 +1,7 @@
 [workspace]
 members = ["crates/wolf-core", "crates/wolf-manager", "crates/wolf-host"]
 resolver = "3"
+exclude = ["vendor/rumqttc"]
 
 [workspace.package]
 version = "0.1.0"
@@ -47,3 +48,6 @@ unicode-general-category = "1.1.0"
 lto = "thin"
 strip = true
 codegen-units = 1
+
+[patch.crates-io]
+rumqttc = { path = "vendor/rumqttc" }

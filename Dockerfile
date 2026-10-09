@@ -18,6 +18,7 @@ LABEL org.opencontainers.image.title="HA Wolf Manager" \
 COPY --chmod=0755 build/ha-wolf-manager /ha-wolf-manager
 COPY --chmod=0755 build/wolf-manager-host /wolf-manager-host
 COPY LICENSE /LICENSE
+COPY --chmod=0444 vendor/rumqttc/LICENSE /licenses/rumqttc.txt
 
 ENV WOLF_DATA_DIR=/data \
     WOLF_MODE=ingress \

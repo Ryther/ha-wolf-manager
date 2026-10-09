@@ -29,7 +29,7 @@ def archive(entries):
     out=io.BytesIO()
     with tarfile.open(fileobj=out,mode='w:gz') as tar:
         for name,data,kind in entries:
-            info=tarfile.TarInfo(name);info.mode=0o755 if name.endswith('wolf-manager-host') or name=='install.sh' else 0o644
+            info=tarfile.TarInfo(name);info.mode=0o755 if name.endswith('wolf-manager-host') or name=='install.sh' else (0o444 if name in v.HOST_LICENSES else 0o644)
             if kind=='link':info.type=tarfile.SYMTYPE;info.linkname='/etc/passwd'
             elif kind=='hardlink':info.type=tarfile.LNKTYPE;info.linkname='bin/wolf-manager-host'
             elif kind=='device':info.type=tarfile.CHRTYPE
@@ -50,8 +50,8 @@ class Authority:
 
 def fixture():
     files={
-        'wolf-manager-host-v0.1.0-x86_64-unknown-linux-musl.tar.gz':archive([('bin/wolf-manager-host',elf(62),'file')]),
-        'wolf-manager-host-v0.1.0-aarch64-unknown-linux-musl.tar.gz':archive([('bin/wolf-manager-host',elf(183),'file')]),
+        'wolf-manager-host-v0.1.0-x86_64-unknown-linux-musl.tar.gz':archive([('bin/wolf-manager-host',elf(62),'file'), ('licenses/HA-Wolf-Manager.txt',b'Synthetic MIT\n','file'), ('licenses/rumqttc.txt',b'Synthetic Apache-2.0\n','file')]),
+        'wolf-manager-host-v0.1.0-aarch64-unknown-linux-musl.tar.gz':archive([('bin/wolf-manager-host',elf(183),'file'), ('licenses/HA-Wolf-Manager.txt',b'Synthetic MIT\n','file'), ('licenses/rumqttc.txt',b'Synthetic Apache-2.0\n','file')]),
         'ha-wolf-manager-installer-v0.1.0.tar.gz':archive([('install.sh',b'#!/bin/sh\nexit 0\n','file'),('installer/templates/policy.json',b'{}','file')]),
     }
     files['SHA256SUMS']=''.join(digest(data)+'  '+name+'\n' for name,data in sorted(files.items())).encode()
@@ -77,6 +77,28 @@ def fixture():
     return files,expected,run,jobs,receipt
 
 class CandidateTests(unittest.TestCase):
+    def test_host_licenses_are_required_regular_readonly_and_closed(self):
+        licenses = [('licenses/HA-Wolf-Manager.txt', b'Synthetic MIT\n', 'file'),
+                    ('licenses/rumqttc.txt', b'Synthetic Apache-2.0\n', 'file')]
+        content = archive([('bin/wolf-manager-host', elf(62), 'file'), *licenses])
+        v.inspect_tar(content, 62)
+        for mutation in ('missing', 'unknown', 'link', 'hardlink', 'executable', 'writable'):
+            with self.subTest(mutation=mutation):
+                entries = [('bin/wolf-manager-host', elf(62), 'file'), *licenses]
+                if mutation == 'missing': entries.pop()
+                elif mutation == 'unknown': entries.append(('licenses/unknown.txt', b'unknown', 'file'))
+                elif mutation in ('link', 'hardlink'):
+                    entries[-1] = ('licenses/rumqttc.txt', b'', mutation)
+                content = archive(entries)
+                if mutation in ('executable', 'writable'):
+                    out = io.BytesIO()
+                    with tarfile.open(fileobj=io.BytesIO(content)) as original, tarfile.open(fileobj=out, mode='w:gz') as changed:
+                        for entry in original:
+                            if entry.name == 'licenses/rumqttc.txt': entry.mode = 0o555 if mutation == 'executable' else 0o644
+                            changed.addfile(entry, original.extractfile(entry))
+                    content = out.getvalue()
+                with self.assertRaises(v.VerificationError): v.inspect_tar(content, 62)
+
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
         self.files,self.expected,self.run,self.jobs,self.receipt=fixture()

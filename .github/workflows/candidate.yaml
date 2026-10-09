@@ -499,6 +499,7 @@ jobs:
     - run: |-
         python -m scripts.ci.producer report --name codeql --sha "$CANDIDATE_SHA" --scope "Frozen candidate bytes and source SHA; codeql" --output _tmp/evidence/codeql.json
     - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      if: always()
       with:
         name: evidence-codeql-${{ github.sha }}
         path: _tmp/evidence

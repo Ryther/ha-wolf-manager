@@ -36,7 +36,8 @@ def archive(entries):
             for name, (data, mode) in sorted(entries.items()):
                 v.safe_path(name)
                 v.require(isinstance(data, bytes) and len(data) <= v.MAX_FILE
-                          and type(mode) is int and mode in (0o644, 0o755), 'producer_entry')
+                          and type(mode) is int and (mode in (0o644, 0o755) or
+                          (mode == 0o444 and name in v.HOST_LICENSES)), 'producer_entry')
                 item = tarfile.TarInfo(name)
                 item.size = len(data); item.mode = mode; item.mtime = 0
                 item.uid = item.gid = 0; item.uname = item.gname = ''
@@ -208,10 +209,12 @@ def assemble(root, amd64, arm64, output):
     version = metadata(root)
     platforms = [read_tree(amd64 / 'oci'), read_tree(arm64 / 'oci')]
     files, image = merge_oci(platforms, version)
+    licenses = {'licenses/HA-Wolf-Manager.txt': ((root / 'LICENSE').read_bytes(), 0o444),
+                'licenses/rumqttc.txt': ((root / 'vendor/rumqttc/LICENSE').read_bytes(), 0o444)}
     for path, triple in [(amd64, 'x86_64-unknown-linux-musl'), (arm64, 'aarch64-unknown-linux-musl')]:
         data = (path / 'wolf-manager-host').read_bytes()
         # Validate static binary and archive before it becomes a release subject.
-        content = archive({'bin/wolf-manager-host': (data, 0o755)})
+        content = archive({'bin/wolf-manager-host': (data, 0o755), **licenses})
         v.inspect_tar(content, v.TRIPLES[triple])
         files['wolf-manager-host-v' + version + '-' + triple + ARCHIVE_SUFFIX] = content
     entries = {'install.sh': ((root / 'installer/install.sh').read_bytes(), 0o755)}

@@ -71,6 +71,14 @@ prove live backend, Home Assistant or streaming compatibility. Root installer
 fixtures require their documented disposable environment and explicit opt-in.
 Container syntax checks do not establish direct-OS, GPU or streaming support.
 
+CI runs the workspace coverage and Steam process quiescence fixtures in a
+dedicated Docker PID namespace using the runner's numeric UID/GID. The production
+process guard remains fail-closed. Native candidate jobs additionally execute
+the exact loaded scratch image through the ignored `runtime_candidate` test:
+set `WOLF_TEST_SCRATCH_IMAGE` and optionally `WOLF_TEST_SCRATCH_ROOT` to a
+disposable, host-visible fixture directory. It requires Docker and creates its
+own TLS broker, SSH server and protected state; never supply household data.
+
 When dependencies change, verify current stable versions and image digests from
 primary sources, review the complete lock diff and check both published target
 architectures. Document an intentional older pin and its compatibility reason.

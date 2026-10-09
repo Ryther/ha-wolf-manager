@@ -1,6 +1,9 @@
 **
 !Dockerfile
 !LICENSE
+!vendor/
+!vendor/rumqttc/
+!vendor/rumqttc/LICENSE
 !build/
 !build/ha-wolf-manager
 !build/wolf-manager-host

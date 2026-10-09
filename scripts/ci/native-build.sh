@@ -38,5 +38,11 @@ docker buildx build --platform "linux/$architecture" --provenance=false --sbom=f
   --output type=oci,dest=_tmp/platform.oci.tar \
   --output "type=docker,name=wolf-candidate:$architecture" -f Dockerfile .
 tar -xf _tmp/platform.oci.tar -C _tmp/platform/oci
-# Importing into local Docker only tests scratch startup of the existing bytes.
+# Execute the existing bytes; the driver compiles separately on this native host.
 docker run --rm --network none "wolf-candidate:$architecture" --version | grep -Fx "ha-wolf-manager $version"
+rustup toolchain install 1.99.0 --profile minimal
+WOLF_TEST_SCRATCH_IMAGE="wolf-candidate:$architecture" \
+WOLF_TEST_SCRATCH_ROOT="$PWD/_tmp/candidate-runtime" \
+CARGO_TARGET_DIR="$PWD/_tmp/native-driver-target" \
+  cargo +1.99.0 test --locked -p ha-wolf-manager --test runtime_candidate -- \
+    --ignored --exact exact_scratch_native_tls_ssh_mqtt_state_health_and_sigterm

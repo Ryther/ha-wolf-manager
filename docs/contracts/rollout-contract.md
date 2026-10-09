@@ -10,7 +10,7 @@ Source owner: this repository. Producer: Cargo.toml/Cargo.lock, crates/, web/, D
 
 Outputs:
 - ghcr.io/ryther/ha-wolf-manager:<version>, OCI index containing linux/amd64 and linux/arm64.
-- wolf-manager-host-v<version>-x86_64-unknown-linux-musl.tar.gz and wolf-manager-host-v<version>-aarch64-unknown-linux-musl.tar.gz, each containing bin/wolf-manager-host.
+- wolf-manager-host-v<version>-x86_64-unknown-linux-musl.tar.gz and wolf-manager-host-v<version>-aarch64-unknown-linux-musl.tar.gz, each containing bin/wolf-manager-host plus the exact read-only license files licenses/HA-Wolf-Manager.txt and licenses/rumqttc.txt.
 - ha-wolf-manager-installer-v<version>.tar.gz containing install.sh, installer/templates and documented metadata.
 - SHA256SUMS and release-receipt.json.
 

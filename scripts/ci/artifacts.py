@@ -15,6 +15,12 @@ from scripts.ci import producer as p
 from scripts.ci import verify_candidate as v
 
 
+class _ArtifactRedirect(urllib.request.HTTPRedirectHandler):
+    """Expose the API response for inspection without following its redirect."""
+    def redirect_request(self, request, response, code, message, headers, url):
+        return None
+
+
 def presigned_url(url):
     parsed = urllib.parse.urlsplit(url)
     host = parsed.hostname or ''
@@ -35,11 +41,12 @@ def download(authority, info, output):
         'Authorization': 'Bearer ' + authority.token, 'Accept': 'application/vnd.github+json',
         'X-GitHub-Api-Version': '2026-03-10', 'User-Agent': 'ha-wolf-manager-artifact-receiver'})
     try:
-        authority.opener.open(request, timeout=30)
+        urllib.request.build_opener(_ArtifactRedirect).open(request, timeout=30)
         raise v.VerificationError('artifact_missing_redirect')
     except urllib.error.HTTPError as error:
-        v.require(error.code == 302, 'artifact_http_status')
-        url = presigned_url(error.headers.get('Location', ''))
+        with error:
+            v.require(error.code == 302, 'artifact_http_status')
+            url = presigned_url(error.headers.get('Location', ''))
     try:
         # Even a second signed-URL redirect is refused. Never forward API credentials.
         with urllib.request.build_opener(v._NoRedirect).open(url, timeout=60) as response:
@@ -79,20 +86,47 @@ def extract(source, output):
     p.write_tree(output, files)
 
 
+# Only repository-defined refusal identifiers can enter diagnostics. An unknown
+# VerificationError value must not turn a signed URL or token into a log field.
+REFUSAL_CODES = frozenset("""
+artifact_request artifact_list changing_artifact_list artifact_pagination
+artifact_unique_identity authority_configuration authority_path authority_http_status
+authority_unavailable api_redirect_refused json_size duplicate_json_key non_finite_json
+malformed_json digest_format artifact_metadata artifact_missing_redirect artifact_http_status
+artifact_redirect_origin artifact_download_status artifact_download_unavailable
+artifact_download_digest artifact_path artifact_file bundle_entry_limit archive_path
+duplicate_archive_entry zip_special_entry archive_size zip_directory zip_size malformed_bundle
+""".split())
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--run-id', type=int, required=True); parser.add_argument('--name', required=True)
     parser.add_argument('--output', type=Path, required=True); parser.add_argument('--extract', action='store_true')
     args = parser.parse_args()
-    authority = v.GitHubAuthority(p.REPOSITORY, os.environ['GITHUB_TOKEN'])
-    info = find(authority, args.run_id, args.name)
-    zip_path = args.output.with_suffix('.zip')
-    download(authority, info, zip_path)
-    if args.extract: extract(zip_path, args.output)
-    args.output.with_suffix('.metadata.json').write_bytes(p.encoded(info))
+    stage = 'metadata'
+    try:
+        authority = v.GitHubAuthority(p.REPOSITORY, os.environ['GITHUB_TOKEN'])
+        info = find(authority, args.run_id, args.name)
+        stage = 'download'
+        zip_path = args.output.with_suffix('.zip')
+        download(authority, info, zip_path)
+        if args.extract:
+            stage = 'extract'
+            extract(zip_path, args.output)
+        stage = 'metadata-write'
+        args.output.with_suffix('.metadata.json').write_bytes(p.encoded(info))
+    except v.VerificationError as error:
+        code = str(error)
+        code = code if code in REFUSAL_CODES else 'verification_refused'
+        raise SystemExit(f'Artifact receiver refused: stage={stage} code={code}') from None
+    except OSError:
+        raise SystemExit(f'Artifact receiver refused: stage={stage} type=OSError') from None
+    except KeyError:
+        raise SystemExit(f'Artifact receiver refused: stage={stage} type=KeyError') from None
+    except ValueError:
+        raise SystemExit(f'Artifact receiver refused: stage={stage} type=ValueError') from None
 
 
 if __name__ == '__main__':
-    try: main()
-    except (v.VerificationError, OSError, KeyError, ValueError):
-        raise SystemExit('Artifact receiver refused the request; credentials and raw errors are not logged.')
+    main()

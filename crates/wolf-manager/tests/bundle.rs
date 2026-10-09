@@ -25,7 +25,7 @@ fn populate(root: &std::path::Path) -> Vec<u8> {
     drop(store);
     Recovery::open(root, 3)
         .unwrap()
-        .reset_password("SyntheticPassword!42", 4)
+        .reset_password(&uuid::Uuid::new_v4().to_string(), 4)
         .unwrap();
     fs::read(root.join("keys/fixture/id_ed25519")).unwrap()
 }

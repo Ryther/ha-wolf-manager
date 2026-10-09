@@ -36,6 +36,12 @@ the verified API version 2026-03-10. Redirects are refused, preventing forwarded
 API credentials from leaving that origin. CLI failures emit a fixed refusal
 message; no raw API errors or credential values are printed.
 
+`artifacts.py` reports the fixed phase of a refused receive (metadata, download,
+extract or metadata-write) and an allowlisted refusal identifier or exception
+class. Unknown exception content is omitted, including signed URLs, tokens and
+raw transport errors. It never retries an identity or digest refusal or treats
+an unavailable artifact as successful evidence.
+
 ## Producer handoff
 
 The allowlisted successful candidate run must expose one immutable workflow
@@ -69,8 +75,11 @@ foreign-SHA or failed job substitutes for that name. Protected check jobs must
 actually verify the exact bundle subjects they attest; receipt strings and
 candidate-authored reports are not independent quality-gate authority.
 
-Host archives allow only the executable `bin/wolf-manager-host` plus optional
-`bin/` directory. ELF target machine, bounds, executable load segment, absence
+Host archives require the executable `bin/wolf-manager-host` and the exact
+read-only regular files `licenses/HA-Wolf-Manager.txt` and `licenses/rumqttc.txt`,
+plus optional `bin/` and `licenses/` directories. Other license names, links,
+writable or executable license files are refused. ELF target machine, bounds,
+executable load segment, absence
 of PT_INTERP and absence of DT_NEEDED are verified. Installer archives contain
 executable POSIX `install.sh`, `installer/templates/**`, optional directory
 entries and optional `installer/metadata.json`. No links, devices, traversal,
@@ -100,6 +109,18 @@ startup, actual security scans or live GitHub/GHCR publication.
 pinned musl builder. `native-build.sh` validates ELF linkage and versions and
 packages prebuilt bytes through the root `FROM scratch` Dockerfile. Buildx
 exports OCI and a local smoke-test image from the same build operation.
+Before uploading either native platform, the pinned GNU Rust test driver
+executes that exact loaded image ID without emulation. The opt-in
+`runtime_candidate` fixture verifies trusted HTTPS, session/CSRF enforcement,
+pinned-key native SSH with the fixed RPC command, MQTT5 over a private TLS CA,
+UID/GID 1000 protected writable state, native exec health, admitted-operation
+and MQTT acknowledgement draining on SIGTERM, and retained identity/session
+state after restart. Its broker and data are freshly created disposable
+fixtures. It does not exercise Supervisor root startup or GPU streaming.
+
+Workspace LLVM coverage and the Steam process quiescence suite run with the
+runner's numeric UID/GID in a separate Docker PID namespace. This isolates
+unrelated runner processes without weakening the production refusal policy.
 `producer.py assemble` creates reproducible host/installer archives and merges
 platform manifests without changing their bytes. `check_subject.py` seals and
 verifies the full subject file map, host ELFs, archive checksums and OCI graph.
@@ -112,8 +133,16 @@ MQTT broker fixtures, lifecycle, Chromium UI fixtures, seven disposable Linux
 container families, add-on schema, Cargo audit, Gitleaks, CodeQL and per-platform
 Trivy scans. CodeQL supports Rust with `build-mode: none`, and also analyzes
 JavaScript/TypeScript, Python and Actions. The SARIF gate refuses high/critical
-security findings. Trivy's scratch-image scan complements Cargo.lock auditing;
+security findings, resolving rule metadata in both the driver and extension
+components. CodeQL excludes only the canonical upstream
+`vendor/rumqttc/examples/tls.rs` demonstration, which contains illustrative
+credentials and is not compiled into the product. Vendored library sources and
+owned tests remain scanned; owned authentication fixtures generate credentials
+at runtime. Trivy's scratch-image scan complements Cargo.lock auditing;
 it does not substitute for dependency analysis of statically compiled Rust.
+CodeQL uploads raw SARIF diagnostics even when its gate fails. A failed gate
+still skips the success report and blocks both the job and publication; a
+diagnostic artifact cannot certify a successful security check.
 
 The add-on schema is the pinned community app schema, with its upstream license
 retained. Container checks establish restricted SSH/policy and syntax behavior,

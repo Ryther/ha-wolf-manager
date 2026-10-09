@@ -6,6 +6,7 @@ from pathlib import Path
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 
 from scripts.ci import producer as p
 from scripts.ci import verify_candidate as v
@@ -13,6 +14,40 @@ from test_candidate import fixture, encoded, SHA
 
 
 class ProducerTests(unittest.TestCase):
+    def test_assembled_host_archives_preserve_both_license_texts(self):
+        files, _, _, _, receipt = fixture()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'root'
+            licenses = {'licenses/HA-Wolf-Manager.txt': b'Synthetic MIT license\n',
+                        'licenses/rumqttc.txt': b'Synthetic Apache-2.0 license\n'}
+            p.write_tree(root, {'LICENSE': licenses['licenses/HA-Wolf-Manager.txt'],
+                               'vendor/rumqttc/LICENSE': licenses['licenses/rumqttc.txt'],
+                               'installer/install.sh': b'#!/bin/sh\nexit 0\n',
+                               'installer/templates/policy.json': b'{}'})
+            platforms = []
+            for platform in receipt['image']['platforms']:
+                architecture = platform['architecture']
+                path = root / architecture
+                layout = {name[4:]: data for name, data in files.items() if name.startswith('oci/')}
+                layout['index.json'] = encoded({'schemaVersion': 2, 'manifests': [{
+                    'mediaType': v.MANIFEST_TYPE, 'digest': platform['digest'],
+                    'size': len(files['oci/blobs/sha256/' + platform['digest'][7:]]),
+                    'platform': {'os': 'linux', 'architecture': architecture}}]})
+                p.write_tree(path / 'oci', layout)
+                triple = 'x86_64-unknown-linux-musl' if architecture == 'amd64' else 'aarch64-unknown-linux-musl'
+                with tarfile.open(fileobj=io.BytesIO(files['wolf-manager-host-v0.1.0-' + triple + '.tar.gz'])) as tar:
+                    (path / 'wolf-manager-host').write_bytes(tar.extractfile('bin/wolf-manager-host').read())
+                platforms.append(path)
+            output = root / 'output'
+            with mock.patch.object(p, 'metadata', return_value='0.1.0'):
+                p.assemble(root, *platforms, output)
+            for triple in v.TRIPLES:
+                with tarfile.open(output / ('wolf-manager-host-v0.1.0-' + triple + '.tar.gz')) as tar:
+                    self.assertEqual(set(tar.getnames()), {'bin/wolf-manager-host', *licenses})
+                    for name, content in licenses.items():
+                        self.assertEqual(tar.extractfile(name).read(), content)
+                        self.assertEqual(tar.getmember(name).mode, 0o444)
+
     def test_archives_are_reproducible_and_ignore_source_metadata(self):
         entries = {'bin/wolf-manager-host': (b'binary', 0o755)}
         self.assertEqual(p.archive(entries), p.archive(entries))
