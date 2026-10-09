@@ -211,8 +211,10 @@ with the coordinated Release Please configuration. Its completed-CI receiver
 checks out `github.workflow_sha`, never the producer SHA, and serializes
 publication. The separate event boundary prevents a still-running producer from
 certifying its own completion. Its
-receiver verification job has read permissions only. The environment-protected publication job
-repeats the verification before granting its token to the closed transfer code.
+environment-protected receiver verification job performs read-only checks with
+`contents: write` to retrieve private drafts, and has no package write permission.
+The protected publication job repeats verification before transferring bytes through
+the closed transfer code.
 Candidate archive contents are never executed with publication credentials.
 
 Configure and independently verify these settings before enabling publication:

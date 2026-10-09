@@ -22,7 +22,7 @@ class CommunityTests(unittest.TestCase):
             self.addCleanup(os.chdir, previous)
             os.chdir(temporary)
             Path('_tmp').mkdir(mode=0o700)
-            for name in ('rust.lcov', 'javascript.lcov', 'python.xml'):
+            for name in ('rust.lcov', 'javascript.lcov', 'python.xml', 'clippy.json'):
                 (Path('_tmp') / name).write_bytes(b'disposable report input')
             args = argparse.Namespace(project='example', sha='1' * 40,
                 rust_lcov=Path('_tmp/rust.lcov'), javascript_lcov=Path('_tmp/javascript.lcov'),
@@ -43,6 +43,7 @@ class CommunityTests(unittest.TestCase):
             self.assertIn('type=bind,source=' + str(Path.cwd()) + ',target=' + str(Path.cwd()) + ',readonly', command)
             settings = Path('_tmp/work/sonar-project.properties').read_text()
             self.assertIn('sonar.rust.clippy.enabled=false', settings)
+            self.assertIn('-Dsonar.rust.clippyReport.reportPaths=' + str(Path.cwd() / '_tmp/clippy.json'), command)
 
     def test_native_http_token_lifecycle_and_diagnostics_never_follow_redirects(self):
         from scripts.ci import sonar_community as c, sonar_gate as s

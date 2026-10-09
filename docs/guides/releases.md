@@ -99,8 +99,9 @@ scans or gates; an uploaded diagnostic never replaces a successful check.
 **Release** prepares Release Please metadata on main pushes and receives completed
 **CI** runs separately. Its receiver can also be dispatched manually with an
 existing successful main `run_id`; select `main` as the workflow branch.
-The read-only verification job checks eligibility; the protected publication
-job repeats verification before transferring bytes. Publication never runs
+The protected verification job performs read-only eligibility checks. Its token
+has `contents: write` so GitHub returns private draft releases; it has no package
+write permission. The protected publication job repeats verification before transferring bytes. Publication never runs
 inside the still-running producer.
 
 The publisher executes its own trusted workflow revision, never candidate archive content. It resolves the coordinated version, draft and tag independently; a fork/PR producer, wrong tag commit, missing/failed check, ambiguous artifact or altered ZIP is rejected. It uploads the original verified blobs/manifests to `ghcr.io/ryther/ha-wolf-manager` and original versioned archives/evidence to the existing GitHub draft. It performs no compilation or image rebuild. Only after remote identities and anonymous image access match does it make that draft public.
