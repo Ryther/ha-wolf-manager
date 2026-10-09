@@ -20,6 +20,7 @@ BLOB_PATH = 'blobs/'
 BLOB_UPLOAD_PATH = 'blobs/uploads/'
 
 OCI_BLOB_PREFIX = 'oci/blobs/sha256/'
+OCI_INDEX_FILE = 'oci/index.json'
 
 
 AUTHENTICATION_PHASE = 'authentication'
@@ -143,7 +144,7 @@ def publish(files, image, request, *, transfer):
     # Bulk copy is digest-only: it cannot authorize a changed version tag.
     check_tag(image, request)
     verify_graph(files, image, request)
-    root = v.json_bytes(files['oci/index.json'])['manifests'][0]
+    root = v.json_bytes(files[OCI_INDEX_FILE])['manifests'][0]
     # transfer_manifest independently checks the tag immediately before binding.
     transfer_manifest(files, root, image['tag'], request)
     return root['digest']
@@ -162,7 +163,7 @@ def verify_graph(files, image, request):
     v.verify_oci(files, image)
     v.require(image['repository'] == 'ghcr.io/ryther/ha-wolf-manager'
               and v.SEMVER.fullmatch(image['tag']), 'registry_public_subject')
-    root = v.json_bytes(files['oci/index.json'])['manifests'][0]
+    root = v.json_bytes(files[OCI_INDEX_FILE])['manifests'][0]
     verify_public_manifest(files, root, root['digest'], request)
     index = v.json_bytes(files[OCI_BLOB_PREFIX + v.parse_digest(root['digest'])])
     blobs = {}
@@ -181,6 +182,6 @@ def verify_graph(files, image, request):
 def verify_public(files, image, request):
     """Verify anonymous graph access and the exact final version tag."""
     digest = verify_graph(files, image, request)
-    root = v.json_bytes(files['oci/index.json'])['manifests'][0]
+    root = v.json_bytes(files[OCI_INDEX_FILE])['manifests'][0]
     verify_public_manifest(files, root, image['tag'], request)
     return digest
