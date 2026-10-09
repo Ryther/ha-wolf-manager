@@ -67,7 +67,11 @@ coverage for every measured language and at least 80% combined project coverage.
 Line coverage does not establish crash safety or branch coverage.
 
 Run focused meaningful checks during development and affected required checks
-before completion. Browser API fixtures prove the browser contract; they do not
+before completion. Before pushing, run the routine container preflight with
+`docker compose -f .devcontainer/compose.yaml exec -T devcontainer sh .devcontainer/verify.sh`.
+It includes the ordinary workspace, private-broker, UI, Python and documentation
+checks; root fixtures and security/coverage scanners remain separately required
+where affected. Browser API fixtures prove the browser contract; they do not
 prove live backend, Home Assistant or streaming compatibility. Root installer
 fixtures require their documented disposable environment and explicit opt-in.
 Container syntax checks do not establish direct-OS, GPU or streaming support.
