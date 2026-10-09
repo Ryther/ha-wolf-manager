@@ -515,6 +515,10 @@ def _verify_candidate(receipt_bytes, artifacts, authority, expected):
     require(isinstance(artifacts, dict) and set(artifacts) == {selected_id}, 'artifact_mapping')
     bundles, metadata, merged = verify_release_assets(receipt, artifacts, authority, expected, selected, run)
     verify_oci(merged, receipt['image'])
+    from scripts.ci import trivy_gate
+    for architecture in ('amd64', 'arm64'):
+        report = merged.get('reports/image-scan-' + architecture + '/trivy-' + architecture + '.json')
+        trivy_gate.verify_report(merged, receipt['image'], architecture, report)
     evidence_hashes = {}
     for check in receipt['checks']:
         prefix = f'artifact:{selected_id}/'
