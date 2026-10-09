@@ -132,7 +132,8 @@ class NetworkContracts(unittest.TestCase):
             return original_get(path)
         def write(method, path, value=None, raw=None):
             writes.append((method, path, value, raw))
-            if method == 'PATCH': return {'draft': False}
+            if method == 'PATCH': return {'id': 1, 'tag_name': 'v0.1.0',
+                'target_commitish': test_publisher.SHA, 'draft': False, 'prerelease': False}
             name = urllib.parse.parse_qs(urllib.parse.urlsplit(path).query)['name'][0]
             item = {'name': name, 'size': len(raw), 'digest': 'sha256:' + v.sha256(raw)}
             remote.append(item)
