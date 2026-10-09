@@ -9,6 +9,6 @@
     {"family":"ubuntu","image":"ubuntu@sha256:f144425ff09be612d6d9ad965196e9cdc23dae1f42110a8a11a3e9a8198759f7","selected_tag":"26.04","release":"26.04.1 LTS","source":"https://ubuntu.com/project/docs/release-team/list-of-releases/"},
     {"family":"fedora","image":"registry.fedoraproject.org/fedora@sha256:ba35579e107f26a4c2c000390fb3ff549f3858a9584a6b5a35f7fa51f54de309","selected_tag":"44","release":"44 stable","source":"https://fedoraproject.org/en/misc/"},
     {"family":"leap","image":"registry.opensuse.org/opensuse/leap@sha256:cd9aac11608afabc96a10074619cf2a65ccf60ff4b72d09d4e4e125af409035d","selected_tag":"16.0","release":"16.0 stable; 16.1 still RC","source":"https://news.opensuse.org/2026/09/24/leap-rc/"},
-    {"family":"tumbleweed","image":"registry.opensuse.org/opensuse/tumbleweed@sha256:85386b1c2330a5e72a720099327b682dc681e4eb47dea892c0153090e7e704c5","selected_tag":"latest","release":"rolling","source":"https://hub.docker.com/_/opensuse"}
+    {"family":"tumbleweed","image":"registry.opensuse.org/opensuse/tumbleweed:20261003@sha256:e1f12ceed5df529634484933b3fa837869d981e5081e1fbba47dda5a585367f7","selected_tag":"20261003","release":"rolling snapshot 20261003","verified_at":"2026-10-09","source":"https://registry.opensuse.org/v2/opensuse/tumbleweed/tags/list"}
   ]
 }
