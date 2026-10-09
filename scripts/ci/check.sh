@@ -36,6 +36,14 @@ case "$check" in
       -e CARGO_TARGET_DIR="$PWD/target" \
       -e CARGO_LLVM_COV_TARGET_DIR="$PWD/target/llvm-cov-target" \
       wolf-coverage-fixture sh -eu -c '
+        restore_fixture_ownership() {
+          chown -R "$(stat -c %u .):$(stat -c %g .)" target "$CARGO_HOME"
+        }
+        trap restore_fixture_ownership EXIT
+        # Add-on and catalog children drop to UID 1000; the hosted runner may
+        # use another UID. Grant profile writes without world-writable outputs.
+        chown 1000:1000 "$CARGO_LLVM_COV_TARGET_DIR"
+        chmod 0755 "$CARGO_LLVM_COV_TARGET_DIR"
         apt-get update
         apt-get install -y --no-install-recommends openssh-server sudo
         mkdir -p /run/sshd
@@ -46,7 +54,6 @@ case "$check" in
         cargo llvm-cov --locked --no-report -p ha-wolf-manager --test ha_bootstrap -- --ignored --exact native_supervisor_get_only_bearer_bounded_response_and_failure
         cargo llvm-cov --locked --no-report -p ha-wolf-manager --test cli_runtime -- --ignored --exact root_addon_startup_preserves_existing_state_and_admits_only_fresh_options
         WOLF_TEST_CLI_RUNTIME=1 cargo llvm-cov --locked --no-report -p wolf-manager-host --test cli_runtime -- --ignored --test-threads=1
-        chown -R "$(stat -c %u .):$(stat -c %g .)" target "$CARGO_HOME"
       '
     printf 'listener 18889\nallow_anonymous true\npersistence false\n' > _tmp/coverage-mqtt.conf
     docker run -d --name ci-coverage-mqtt --network host --mount "type=bind,source=$PWD/_tmp/coverage-mqtt.conf,target=/mosquitto/config/mosquitto.conf,readonly" eclipse-mosquitto:2.1.2-alpine@sha256:38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408
