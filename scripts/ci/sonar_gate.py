@@ -11,14 +11,15 @@ import urllib.parse
 import urllib.request
 from scripts.ci import evidence_output as e, producer as p, verify_candidate as v
 
-SERVER = ContextVar('sonar_server', default='https://sonarcloud.io')
+CLOUD = 'https://sonarcloud.io'
+SERVER = ContextVar('sonar_server', default=CLOUD)
 TOKEN = ContextVar('sonar_token', default=None)
 COMMUNITY = 'http://127.0.0.1:9000'
 
 
 @contextmanager
 def server(url, token):
-    v.require(url in ('https://sonarcloud.io', COMMUNITY), 'sonar_server_origin')
+    v.require(url in (CLOUD, COMMUNITY), 'sonar_server_origin')
     v.require(isinstance(token, str) and 0 < len(token) <= 4096
               and not any(ord(c) < 33 or ord(c) == 127 for c in token), 'sonar_token')
     endpoint = SERVER.set(url)
@@ -256,7 +257,7 @@ def main():
     parser.add_argument('--rust-lcov', type=Path, required=True)
     parser.add_argument('--javascript-lcov', type=Path, required=True)
     parser.add_argument('--python-xml', type=Path, required=True)
-    parser.add_argument('--server-url', choices=('https://sonarcloud.io', COMMUNITY), default='https://sonarcloud.io')
+    parser.add_argument('--server-url', choices=(CLOUD, COMMUNITY), default=CLOUD)
     args = parser.parse_args()
     try:
         output = e.Output(args.output)

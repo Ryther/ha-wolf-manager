@@ -3,6 +3,10 @@ import secrets
 import json
 import base64
 import os
+from pathlib import Path
+import argparse
+import subprocess
+import tempfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import threading
 from unittest.mock import patch
@@ -11,6 +15,35 @@ from scripts.ci import verify_candidate as v
 
 
 class CommunityTests(unittest.TestCase):
+    def test_scanner_has_resource_bounds_and_never_puts_credentials_in_arguments(self):
+        from scripts.ci import sonar_community as c
+        with tempfile.TemporaryDirectory() as temporary:
+            previous = Path.cwd()
+            self.addCleanup(os.chdir, previous)
+            os.chdir(temporary)
+            Path('_tmp').mkdir(mode=0o700)
+            for name in ('rust.lcov', 'javascript.lcov', 'python.xml'):
+                (Path('_tmp') / name).write_bytes(b'disposable report input')
+            args = argparse.Namespace(project='example', sha='1' * 40,
+                rust_lcov=Path('_tmp/rust.lcov'), javascript_lcov=Path('_tmp/javascript.lcov'),
+                python_xml=Path('_tmp/python.xml'), work=Path('_tmp/work'))
+            secret = secrets.token_urlsafe(32)
+            command = []
+            def docker(argv, **options):
+                command.extend(argv)
+                self.assertEqual(options['env'], {'PATH': os.defpath, 'SONAR_TOKEN': secret})
+                return subprocess.CompletedProcess(argv, 0)
+            with patch.object(c.subprocess, 'run', side_effect=docker):
+                receipt = c.scanner(args, secret)
+            self.assertEqual(receipt, Path('_tmp/work/analysis/report-task.txt'))
+            self.assertIn('--memory', command)
+            self.assertEqual(command[command.index('--memory') + 1], '2g')
+            self.assertEqual(command[command.index('--cpus') + 1], '2')
+            self.assertNotIn(secret, ' '.join(command))
+            self.assertIn('type=bind,source=' + str(Path.cwd()) + ',target=' + str(Path.cwd()) + ',readonly', command)
+            settings = Path('_tmp/work/sonar-project.properties').read_text()
+            self.assertIn('sonar.rust.clippy.enabled=false', settings)
+
     def test_native_http_token_lifecycle_and_diagnostics_never_follow_redirects(self):
         from scripts.ci import sonar_community as c, sonar_gate as s
         password = secrets.token_urlsafe(32)
