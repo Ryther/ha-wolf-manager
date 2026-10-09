@@ -1,7 +1,10 @@
 """Fail CodeQL SARIF on high/critical security findings or invalid reports."""
 import argparse
+import logging
 import math
+import os
 from pathlib import Path
+import stat
 from scripts.ci import verify_candidate as v
 
 
@@ -88,13 +91,76 @@ def security_severity(rule):
     return severity
 
 
+# Home Assistant's internal Supervisor API requires HTTP. Keep the reviewed
+# endpoint, token handling and client restrictions bound to these exact bytes.
+# https://developers.home-assistant.io/docs/apps/communication/#supervisor-api
+SUPERVISOR_SOURCE = 'crates/wolf-manager/src/ha_bootstrap.rs'
+SUPERVISOR_SHA256 = 'e55b67da5034db6307a4e280b0fbd00548ae7639ab8e203e7d4a50c0b713c0c3'
+
+
+def reviewed_supervisor_source():
+    descriptors = []
+    flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK
+    try:
+        descriptor = os.open('.', flags | os.O_DIRECTORY)
+        descriptors.append(descriptor)
+        for name in SUPERVISOR_SOURCE.split('/')[:-1]:
+            descriptor = os.open(name, flags | os.O_DIRECTORY, dir_fd=descriptor)
+            descriptors.append(descriptor)
+            metadata = os.fstat(descriptor)
+            if metadata.st_uid not in (0, os.geteuid()) or metadata.st_mode & 0o022:
+                return False
+        descriptor = os.open('ha_bootstrap.rs', flags, dir_fd=descriptor)
+        descriptors.append(descriptor)
+        metadata = os.fstat(descriptor)
+        if (not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1
+                or metadata.st_uid not in (0, os.geteuid()) or metadata.st_mode & 0o022
+                or metadata.st_size > 16384):
+            return False
+        source = os.read(descriptor, 16385)
+        return len(source) == metadata.st_size and v.sha256(source) == SUPERVISOR_SHA256
+    except OSError:
+        return False
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+def reviewed_supervisor_finding(tool, rule, result, severity, level):
+    if (rule['id'] != 'rust/non-https-url' or severity != 8.1 or level != 'warning'
+            or tool['driver']['name'] != 'CodeQL'
+            or component_for(tool, rule_reference(result).get('toolComponent', {}))['name']
+            != 'codeql/rust-queries'):
+        return False
+    locations = result.get('locations')
+    if not isinstance(locations, list) or len(locations) != 1 or not isinstance(locations[0], dict):
+        return False
+    physical = locations[0].get('physicalLocation')
+    if not isinstance(physical, dict) or set(physical) != {'artifactLocation', 'region'}:
+        return False
+    artifact, region = physical['artifactLocation'], physical['region']
+    if (not isinstance(artifact, dict) or artifact.get('uri') != SUPERVISOR_SOURCE
+            or artifact.get('uriBaseId') != '%SRCROOT%' or not isinstance(region, dict)
+            or set(region) not in ({'startLine', 'startColumn', 'endColumn'},
+                                  {'startLine', 'startColumn', 'endColumn', 'endLine'})):
+        return False
+    expected = {'startLine': 144, 'startColumn': 18, 'endColumn': 51, 'endLine': 144}
+    if any(type(value) is not int or value != expected[key] for key, value in region.items()):
+        return False
+    return reviewed_supervisor_source()
+
+
 def check_result(tool, result):
     rule = rule_for(tool, result)
     defaults = rule.get('defaultConfiguration', {})
     v.require(isinstance(defaults, dict), 'codeql_result')
     level = result.get('level', defaults.get('level', 'warning'))
     v.require(level in ('none', 'note', 'warning', 'error'), 'codeql_result')
-    v.require(security_severity(rule) < 7 and level != 'error', 'codeql_high_finding')
+    severity = security_severity(rule)
+    if reviewed_supervisor_finding(tool, rule, result, severity, level):
+        return 1
+    v.require(severity < 7 and level != 'error', 'codeql_high_finding')
+    return 0
 
 
 def check_notifications(invocation):
@@ -121,6 +187,7 @@ def check_invocations(run):
 def sarif_gate(reports):
     v.require(bool(reports), 'codeql_no_reports')
     count = 0
+    reviewed = 0
     for raw in reports:
         report = v.json_bytes(raw)
         v.require(report.get('version') == '2.1.0' and isinstance(report.get('runs'), list)
@@ -131,12 +198,15 @@ def sarif_gate(reports):
             tool = run.get('tool')
             component_for(tool, {})
             for result in run['results']:
-                check_result(tool, result)
+                reviewed += check_result(tool, result)
+                v.require(reviewed <= 1, 'codeql_duplicate_protocol_finding')
             count += 1
+    logging.getLogger(__name__).info('Reviewed Supervisor HTTP findings accepted: %d', reviewed)
     return count
 
 
 if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO, format='%(message)s')
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('directory', type=Path); args = parser.parse_args()
     print('Verified CodeQL SARIF runs:', sarif_gate([p.read_bytes() for p in args.directory.rglob('*.sarif')]))

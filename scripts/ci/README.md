@@ -144,6 +144,19 @@ CodeQL uploads raw SARIF diagnostics even when its gate fails. A failed gate
 still skips the success report and blocks both the job and publication; a
 diagnostic artifact cannot certify a successful security check.
 
+One reviewed protocol exception accepts `rust/non-https-url` for the fixed
+Supervisor MQTT service lookup. [Home Assistant requires its internal HTTP
+Supervisor API](https://developers.home-assistant.io/docs/apps/communication/#supervisor-api).
+The gate binds the exact Rust query component, severity, effective warning level,
+single location and whole source-file SHA256. It reads that fixed source through
+bounded, non-following descriptors and rejects unsafe files or directories.
+At most one matching result is accepted across the complete report set. Raw
+SARIF retains the finding and the gate logs the accepted count; other high
+findings and failed analyses still refuse. Source changes invalidate this
+exception and require review of the endpoint, scoped token, proxy/redirect
+refusals and response bounds before updating the binding. It does not certify
+the candidate, GitHub job authority or Sonar analysis by itself.
+
 The add-on schema is the pinned community app schema, with its upstream license
 retained. Container checks establish restricted SSH/policy and syntax behavior,
 not direct-OS, systemd PID1, GPU or streaming certification. Browser API fixtures

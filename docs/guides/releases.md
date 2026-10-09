@@ -23,6 +23,15 @@ Configure the Sonar project's intended coverage/security policy and disable auto
 
 The [workflow source](https://github.com/Ryther/ha-wolf-manager/tree/main/.github/workflows), [receiver documentation](https://github.com/Ryther/ha-wolf-manager/blob/main/scripts/ci/README.md) and [rollout contract](../contracts/rollout-contract.md) define the detailed trust boundary.
 
+Ensure the Sonar project's main branch is named `main`, matching this repository.
+The exact-analysis verifier queries that principal branch; an analysis on a
+short-lived branch with the same name cannot replace it. If an empty default
+`master` conflicts with an already analyzed short-lived `main`, a project
+administrator must retain the diagnostic reports, remove only the conflicting
+Sonar analysis branch and rename the empty principal branch to `main`. This does
+not change GitHub branches. Follow [SonarCloud's branch administration guidance](https://community.sonarsource.com/t/unable-to-update-the-long-lasting-branch-of-my-repo/179587),
+then dispatch a complete fresh candidate rather than mixing rerun evidence.
+
 ## Let Release Please coordinate metadata
 
 Use conventional commits and review the PR created by **Coordinated release metadata**. Release Please updates the canonical version, workspace/package metadata, owned Cargo.lock entries, npm lock metadata and add-on version together. Do not bump individual services or independently run a version command.
