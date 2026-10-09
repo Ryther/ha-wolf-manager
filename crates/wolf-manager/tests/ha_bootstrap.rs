@@ -70,3 +70,71 @@ async fn native_supervisor_get_only_bearer_bounded_response_and_failure() {
     assert!(supervisor.mqtt().await.is_err());
     task.await.unwrap();
 }
+
+#[test]
+fn secret_fifo_is_rejected_without_waiting_for_a_writer() {
+    use std::{fs::OpenOptions, os::unix::fs::OpenOptionsExt, sync::mpsc};
+    let root = tempfile::tempdir().unwrap();
+    let fifo = root.path().join("mqtt-password");
+    assert!(
+        std::process::Command::new("mkfifo")
+            .args(["-m", "600"])
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let path = fifo.clone();
+    let (send, receive) = mpsc::channel();
+    let thread = std::thread::spawn(move || {
+        send.send(secret_value(None, Some(&path))).unwrap();
+    });
+    let immediate = receive.recv_timeout(Duration::from_millis(300));
+    // Release a blocking regression before joining: fixture failures must not hang.
+    let release = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32)
+        .open(&fifo)
+        .unwrap();
+    thread.join().unwrap();
+    drop(release);
+    assert!(
+        immediate
+            .expect("MQTT secret FIFO blocked before metadata refusal")
+            .is_err()
+    );
+}
+
+#[test]
+fn options_and_secret_limits_fail_closed_without_mutating_inputs() {
+    let root = tempfile::tempdir().unwrap();
+    let options = root.path().join("options.json");
+    fs::write(
+        &options,
+        br#"{"topic_base":"fixture/v1","discovery_prefix":"fixture-discovery"}"#,
+    )
+    .unwrap();
+    assert_eq!(read_options(&options).unwrap().topic_base, "fixture/v1");
+    fs::write(&options, vec![b' '; 65537]).unwrap();
+    assert!(read_options(&options).is_err());
+    assert_eq!(fs::metadata(&options).unwrap().len(), 65537);
+    for value in ["", "line\nsecond", "nul\0value", "carriage\rreturn"] {
+        assert!(secret_value(Some(value), None).is_err());
+    }
+    assert!(secret_value(Some(&"x".repeat(65537)), None).is_err());
+    assert_eq!(secret_value(None, None).unwrap(), None);
+    let secret = root.path().join("password");
+    fs::write(&secret, [0xff, 0xfe]).unwrap();
+    fs::set_permissions(&secret, fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(secret_value(None, Some(&secret)).is_err());
+    fs::write(&secret, b"preserved").unwrap();
+    fs::set_permissions(&secret, fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(secret_value(None, Some(&secret)).is_err());
+    assert_eq!(fs::read(&secret).unwrap(), b"preserved");
+    fs::set_permissions(&secret, fs::Permissions::from_mode(0o600)).unwrap();
+    fs::write(&secret, vec![b'x'; 65537]).unwrap();
+    assert!(secret_value(None, Some(&secret)).is_err());
+    assert!(SupervisorClient::new(String::new()).is_err());
+    assert!(SupervisorClient::new("bad\r\nheader".into()).is_err());
+}

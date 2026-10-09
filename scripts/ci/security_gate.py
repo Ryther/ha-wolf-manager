@@ -95,7 +95,7 @@ def security_severity(rule):
 # endpoint, token handling and client restrictions bound to these exact bytes.
 # https://developers.home-assistant.io/docs/apps/communication/#supervisor-api
 SUPERVISOR_SOURCE = 'crates/wolf-manager/src/ha_bootstrap.rs'
-SUPERVISOR_SHA256 = 'e55b67da5034db6307a4e280b0fbd00548ae7639ab8e203e7d4a50c0b713c0c3'
+SUPERVISOR_SHA256 = 'b10e250087cce0cedea931cf03f66254be3fcaf759305433b2b24f9a3e2edd40'
 
 
 def reviewed_supervisor_source():

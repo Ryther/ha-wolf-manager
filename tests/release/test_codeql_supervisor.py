@@ -13,7 +13,7 @@ from scripts.ci import security_gate as s, verify_candidate as v
 
 SOURCE_PATH = Path('crates/wolf-manager/src/ha_bootstrap.rs')
 SOURCE_BYTES = (Path(__file__).resolve().parents[2] / SOURCE_PATH).read_bytes()
-SOURCE_SHA256 = 'e55b67da5034db6307a4e280b0fbd00548ae7639ab8e203e7d4a50c0b713c0c3'
+SOURCE_SHA256 = 'b10e250087cce0cedea931cf03f66254be3fcaf759305433b2b24f9a3e2edd40'
 
 
 def reviewed_report():
