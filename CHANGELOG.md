@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.3](https://github.com/Ryther/ha-wolf-manager/compare/v0.1.2...v0.1.3) (2026-10-09)
+
+
+### Bug Fixes
+
+* align publication and user documentation ([72a8abc](https://github.com/Ryther/ha-wolf-manager/commit/72a8abc7ea77b895b31a9e79bfa981106a6d5ab1))
+* **ci:** report safe registry publication failures ([6364032](https://github.com/Ryther/ha-wolf-manager/commit/6364032567052b24ebd77404a5bad495cc98924f))
+
 ## [0.1.2](https://github.com/Ryther/ha-wolf-manager/compare/v0.1.1...v0.1.2) (2026-10-09)
 
 
