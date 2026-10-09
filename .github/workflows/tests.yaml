@@ -3,7 +3,7 @@ name: Reusable candidate tests
   workflow_call:
     inputs:
       ref:
-        description: Exact40hex source commit to validate
+        description: Exact current event SHA to validate
         required: true
         type: string
     outputs:
@@ -31,12 +31,13 @@ jobs:
       with:
         persist-credentials: false
         fetch-depth: 0
-        ref: ${{ inputs.ref }}
+        ref: ${{ github.sha }}
     - name: Verify exact checkout identity
       run: |-
         python - <<'PYREF'
         import os, re, subprocess
         expected = os.environ['CANDIDATE_SHA']
+        assert expected == os.environ['GITHUB_SHA'], 'Requested SHA differs from event subject'
         assert re.fullmatch(r'[0-9a-f]{40}', expected), 'An exact commit SHA is required'
         assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == expected, 'Checkout differs from requested SHA'
         PYREF
@@ -75,12 +76,13 @@ jobs:
       with:
         persist-credentials: false
         fetch-depth: 0
-        ref: ${{ inputs.ref }}
+        ref: ${{ github.sha }}
     - name: Verify exact checkout identity
       run: |-
         python - <<'PYREF'
         import os, re, subprocess
         expected = os.environ['CANDIDATE_SHA']
+        assert expected == os.environ['GITHUB_SHA'], 'Requested SHA differs from event subject'
         assert re.fullmatch(r'[0-9a-f]{40}', expected), 'An exact commit SHA is required'
         assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == expected, 'Checkout differs from requested SHA'
         PYREF
@@ -121,12 +123,13 @@ jobs:
       with:
         persist-credentials: false
         fetch-depth: 0
-        ref: ${{ inputs.ref }}
+        ref: ${{ github.sha }}
     - name: Verify exact checkout identity
       run: |-
         python - <<'PYREF'
         import os, re, subprocess
         expected = os.environ['CANDIDATE_SHA']
+        assert expected == os.environ['GITHUB_SHA'], 'Requested SHA differs from event subject'
         assert re.fullmatch(r'[0-9a-f]{40}', expected), 'An exact commit SHA is required'
         assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == expected, 'Checkout differs from requested SHA'
         PYREF
@@ -164,12 +167,13 @@ jobs:
       with:
         persist-credentials: false
         fetch-depth: 0
-        ref: ${{ inputs.ref }}
+        ref: ${{ github.sha }}
     - name: Verify exact checkout identity
       run: |-
         python - <<'PYREF'
         import os, re, subprocess
         expected = os.environ['CANDIDATE_SHA']
+        assert expected == os.environ['GITHUB_SHA'], 'Requested SHA differs from event subject'
         assert re.fullmatch(r'[0-9a-f]{40}', expected), 'An exact commit SHA is required'
         assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == expected, 'Checkout differs from requested SHA'
         PYREF
@@ -206,12 +210,13 @@ jobs:
       with:
         persist-credentials: false
         fetch-depth: 0
-        ref: ${{ inputs.ref }}
+        ref: ${{ github.sha }}
     - name: Verify exact checkout identity
       run: |-
         python - <<'PYREF'
         import os, re, subprocess
         expected = os.environ['CANDIDATE_SHA']
+        assert expected == os.environ['GITHUB_SHA'], 'Requested SHA differs from event subject'
         assert re.fullmatch(r'[0-9a-f]{40}', expected), 'An exact commit SHA is required'
         assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == expected, 'Checkout differs from requested SHA'
         PYREF
@@ -246,12 +251,13 @@ jobs:
       with:
         persist-credentials: false
         fetch-depth: 0
-        ref: ${{ inputs.ref }}
+        ref: ${{ github.sha }}
     - name: Verify exact checkout identity
       run: |-
         python - <<'PYREF'
         import os, re, subprocess
         expected = os.environ['CANDIDATE_SHA']
+        assert expected == os.environ['GITHUB_SHA'], 'Requested SHA differs from event subject'
         assert re.fullmatch(r'[0-9a-f]{40}', expected), 'An exact commit SHA is required'
         assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == expected, 'Checkout differs from requested SHA'
         PYREF
@@ -286,12 +292,13 @@ jobs:
       with:
         persist-credentials: false
         fetch-depth: 0
-        ref: ${{ inputs.ref }}
+        ref: ${{ github.sha }}
     - name: Verify exact checkout identity
       run: |-
         python - <<'PYREF'
         import os, re, subprocess
         expected = os.environ['CANDIDATE_SHA']
+        assert expected == os.environ['GITHUB_SHA'], 'Requested SHA differs from event subject'
         assert re.fullmatch(r'[0-9a-f]{40}', expected), 'An exact commit SHA is required'
         assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == expected, 'Checkout differs from requested SHA'
         PYREF
@@ -326,12 +333,13 @@ jobs:
       with:
         persist-credentials: false
         fetch-depth: 0
-        ref: ${{ inputs.ref }}
+        ref: ${{ github.sha }}
     - name: Verify exact checkout identity
       run: |-
         python - <<'PYREF'
         import os, re, subprocess
         expected = os.environ['CANDIDATE_SHA']
+        assert expected == os.environ['GITHUB_SHA'], 'Requested SHA differs from event subject'
         assert re.fullmatch(r'[0-9a-f]{40}', expected), 'An exact commit SHA is required'
         assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == expected, 'Checkout differs from requested SHA'
         PYREF
@@ -366,12 +374,13 @@ jobs:
       with:
         persist-credentials: false
         fetch-depth: 0
-        ref: ${{ inputs.ref }}
+        ref: ${{ github.sha }}
     - name: Verify exact checkout identity
       run: |-
         python - <<'PYREF'
         import os, re, subprocess
         expected = os.environ['CANDIDATE_SHA']
+        assert expected == os.environ['GITHUB_SHA'], 'Requested SHA differs from event subject'
         assert re.fullmatch(r'[0-9a-f]{40}', expected), 'An exact commit SHA is required'
         assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == expected, 'Checkout differs from requested SHA'
         PYREF
@@ -406,12 +415,13 @@ jobs:
       with:
         persist-credentials: false
         fetch-depth: 0
-        ref: ${{ inputs.ref }}
+        ref: ${{ github.sha }}
     - name: Verify exact checkout identity
       run: |-
         python - <<'PYREF'
         import os, re, subprocess
         expected = os.environ['CANDIDATE_SHA']
+        assert expected == os.environ['GITHUB_SHA'], 'Requested SHA differs from event subject'
         assert re.fullmatch(r'[0-9a-f]{40}', expected), 'An exact commit SHA is required'
         assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == expected, 'Checkout differs from requested SHA'
         PYREF
@@ -445,12 +455,13 @@ jobs:
       with:
         persist-credentials: false
         fetch-depth: 0
-        ref: ${{ inputs.ref }}
+        ref: ${{ github.sha }}
     - name: Verify exact checkout identity
       run: |-
         python - <<'PYREF'
         import os, re, subprocess
         expected = os.environ['CANDIDATE_SHA']
+        assert expected == os.environ['GITHUB_SHA'], 'Requested SHA differs from event subject'
         assert re.fullmatch(r'[0-9a-f]{40}', expected), 'An exact commit SHA is required'
         assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == expected, 'Checkout differs from requested SHA'
         PYREF
@@ -491,12 +502,13 @@ jobs:
       with:
         persist-credentials: false
         fetch-depth: 0
-        ref: ${{ inputs.ref }}
+        ref: ${{ github.sha }}
     - name: Verify exact checkout identity
       run: |-
         python - <<'PYREF'
         import os, re, subprocess
         expected = os.environ['CANDIDATE_SHA']
+        assert expected == os.environ['GITHUB_SHA'], 'Requested SHA differs from event subject'
         assert re.fullmatch(r'[0-9a-f]{40}', expected), 'An exact commit SHA is required'
         assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == expected, 'Checkout differs from requested SHA'
         PYREF
@@ -533,12 +545,13 @@ jobs:
       with:
         persist-credentials: false
         fetch-depth: 0
-        ref: ${{ inputs.ref }}
+        ref: ${{ github.sha }}
     - name: Verify exact checkout identity
       run: |-
         python - <<'PYREF'
         import os, re, subprocess
         expected = os.environ['CANDIDATE_SHA']
+        assert expected == os.environ['GITHUB_SHA'], 'Requested SHA differs from event subject'
         assert re.fullmatch(r'[0-9a-f]{40}', expected), 'An exact commit SHA is required'
         assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == expected, 'Checkout differs from requested SHA'
         PYREF
@@ -573,12 +586,13 @@ jobs:
       with:
         persist-credentials: false
         fetch-depth: 0
-        ref: ${{ inputs.ref }}
+        ref: ${{ github.sha }}
     - name: Verify exact checkout identity
       run: |-
         python - <<'PYREF'
         import os, re, subprocess
         expected = os.environ['CANDIDATE_SHA']
+        assert expected == os.environ['GITHUB_SHA'], 'Requested SHA differs from event subject'
         assert re.fullmatch(r'[0-9a-f]{40}', expected), 'An exact commit SHA is required'
         assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == expected, 'Checkout differs from requested SHA'
         PYREF
@@ -615,12 +629,13 @@ jobs:
       with:
         persist-credentials: false
         fetch-depth: 0
-        ref: ${{ inputs.ref }}
+        ref: ${{ github.sha }}
     - name: Verify exact checkout identity
       run: |-
         python - <<'PYREF'
         import os, re, subprocess
         expected = os.environ['CANDIDATE_SHA']
+        assert expected == os.environ['GITHUB_SHA'], 'Requested SHA differs from event subject'
         assert re.fullmatch(r'[0-9a-f]{40}', expected), 'An exact commit SHA is required'
         assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == expected, 'Checkout differs from requested SHA'
         PYREF
@@ -662,12 +677,13 @@ jobs:
       with:
         persist-credentials: false
         fetch-depth: 0
-        ref: ${{ inputs.ref }}
+        ref: ${{ github.sha }}
     - name: Verify exact checkout identity
       run: |-
         python - <<'PYREF'
         import os, re, subprocess
         expected = os.environ['CANDIDATE_SHA']
+        assert expected == os.environ['GITHUB_SHA'], 'Requested SHA differs from event subject'
         assert re.fullmatch(r'[0-9a-f]{40}', expected), 'An exact commit SHA is required'
         assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == expected, 'Checkout differs from requested SHA'
         PYREF
@@ -705,7 +721,7 @@ jobs:
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
-        ref: ${{ inputs.ref }}
+        ref: ${{ github.sha }}
         persist-credentials: false
         fetch-depth: 0
     - name: Verify exact checkout identity
@@ -713,6 +729,7 @@ jobs:
         python - <<'PYREF'
         import os, re, subprocess
         expected = os.environ['CANDIDATE_SHA']
+        assert expected == os.environ['GITHUB_SHA'], 'Requested SHA differs from event subject'
         assert re.fullmatch(r'[0-9a-f]{40}', expected), 'An exact commit SHA is required'
         assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == expected, 'Checkout differs from requested SHA'
         PYREF
@@ -736,7 +753,7 @@ jobs:
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
-        ref: ${{ inputs.ref }}
+        ref: ${{ github.sha }}
         persist-credentials: false
         fetch-depth: 0
     - name: Verify exact checkout identity
@@ -744,6 +761,7 @@ jobs:
         python - <<'PYREF'
         import os, re, subprocess
         expected = os.environ['CANDIDATE_SHA']
+        assert expected == os.environ['GITHUB_SHA'], 'Requested SHA differs from event subject'
         assert re.fullmatch(r'[0-9a-f]{40}', expected), 'An exact commit SHA is required'
         assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == expected, 'Checkout differs from requested SHA'
         PYREF

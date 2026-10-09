@@ -40,6 +40,45 @@ class WorkflowTrustTests(unittest.TestCase):
                     self.assertIn("sys.path.insert(0, '_tmp/trusted')", argv[3])
                     self.assertIn("runpy.run_module('scripts.ci." + module + "'", argv[3])
 
+    def test_reusable_candidate_checkout_uses_event_subject_not_requested_input(self):
+        for name in ('tests.yaml', 'codeql.yaml', 'sonar.yaml'):
+            for job in workflow(name)['jobs'].values():
+                for step in job['steps']:
+                    if step.get('uses', '').startswith('actions/checkout@') and step.get('with', {}).get('path') != '_tmp/trusted':
+                        with self.subTest(workflow=name, job=job.get('name')):
+                            self.assertEqual(step['with']['ref'], '${{ github.sha }}')
+                            self.assertFalse(step['with']['persist-credentials'])
+
+    def test_actual_checkout_guards_reject_foreign_event_before_next_command(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(['git', 'init', '-q', str(root)], check=True, capture_output=True)
+            subprocess.run(['git', '-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false',
+                            '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                            'commit', '--allow-empty', '-qm', 'test: disposable guard subject'],
+                           cwd=root, check=True, capture_output=True)
+            sha = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
+            for name in ('tests.yaml', 'codeql.yaml', 'sonar.yaml'):
+                for key, job in workflow(name)['jobs'].items():
+                    guards = [step['run'] for step in job['steps']
+                              if step.get('name') in ('Verify exact checkout identity', 'Verify exact source')]
+                    if not guards:
+                        continue
+                    with self.subTest(workflow=name, job=key):
+                        marker = root / 'candidate-command-ran'
+                        script = guards[0] + '\nprintf checked > candidate-command-ran\n'
+                        environment = {**os.environ, 'CANDIDATE_SHA': sha, 'GITHUB_SHA': sha}
+                        legitimate = subprocess.run(['sh', '-eu', '-c', script], cwd=root,
+                            env=environment, capture_output=True, check=False)
+                        self.assertEqual(legitimate.returncode, 0)
+                        self.assertEqual(marker.read_bytes(), b'checked')
+                        marker.unlink()
+                        environment['GITHUB_SHA'] = '0' * 40
+                        mismatch = subprocess.run(['sh', '-eu', '-c', script], cwd=root,
+                            env=environment, capture_output=True, check=False)
+                        self.assertNotEqual(mismatch.returncode, 0)
+                        self.assertFalse(marker.exists())
+
     def test_sonar_helpers_are_baseline_owned_in_both_scanners_and_gate(self):
         self.assert_baseline_helpers(workflow('sonar.yaml'))
 

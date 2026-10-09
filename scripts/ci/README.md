@@ -113,6 +113,9 @@ startup, actual security scans or live GitHub/GHCR publication.
 ## Implemented workflow commands
 
 `ci.yaml` is the canonical CI caller for main pushes, PRs and manual dispatches.
+Reusable test, CodeQL and Sonar source checkouts use the immutable event
+`github.sha`; their requested `ref` must match that SHA before source execution.
+They cannot select another commit through the reusable input.
 It calls reusable `tests.yaml`, `codeql.yaml` and `sonar.yaml`; main publication
 also requires `commits.yaml`. Only a completed successful main push/dispatch is
 eligible for release authority. PR evidence cannot authorize publication. Native

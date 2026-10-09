@@ -3,7 +3,7 @@ name: CodeQL
   workflow_call:
     inputs:
       ref:
-        description: Exact source commit
+        description: Exact current event SHA
         required: true
         type: string
       subject_artifact:
@@ -32,12 +32,13 @@ jobs:
       with:
         persist-credentials: false
         fetch-depth: 0
-        ref: ${{ inputs.ref || github.sha }}
+        ref: ${{ github.sha }}
     - name: Verify exact checkout identity
       run: |-
         python - <<'PYREF'
         import os, re, subprocess
         expected = os.environ['CANDIDATE_SHA']
+        assert expected == os.environ['GITHUB_SHA'], 'Requested SHA differs from event subject'
         assert re.fullmatch(r'[0-9a-f]{40}', expected), 'An exact commit SHA is required'
         assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == expected, 'Checkout differs from requested SHA'
         PYREF

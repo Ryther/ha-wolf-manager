@@ -32,7 +32,7 @@ class WorkflowReuseTests(unittest.TestCase):
             self.assertNotIn('if', job)
             steps = job['steps']
             checkout = next(step for step in steps if step.get('uses') == CHECKOUT)
-            self.assertEqual(checkout['with']['ref'], '${{ inputs.ref }}')
+            self.assertEqual(checkout['with']['ref'], '${{ github.sha }}')
             self.assertFalse(checkout['with']['persist-credentials'])
             self.assertTrue(any("['git', 'rev-parse', 'HEAD']" in step.get('run', '') for step in steps))
             self.assertNotIn('${{ secrets.', yaml.safe_dump(job))
