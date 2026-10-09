@@ -137,7 +137,7 @@ For an unsuccessful transfer, inspect protected job logs and remote identities. 
 
 ## Rescan the published bytes
 
-**Security** is scheduled for Mondays at 06:31 UTC and can be dispatched manually. With publication enabled, it retrieves the latest public release's `publication.json`, validates version/platform identities and resolves the immutable image index digest. It scans the current lockfile and that same published image on both `amd64` and `arm64`, failing on HIGH/CRITICAL findings and retaining `published-image-rescan-<run-id>` reports for 30 days.
+**Published image security** (`security.yaml`) is scheduled for Mondays at 06:31 UTC and can be dispatched manually. With publication enabled, it retrieves the latest public release's `publication.json`, validates version/platform identities and resolves the immutable image index digest. It scans the current lockfile and that same published image on both `amd64` and `arm64`, failing on HIGH/CRITICAL findings and retaining `published-security-<run-id>` reports for 30 days.
 
 The rescan does not rebuild, alter the image or republish a release. Investigate new findings, fix affected source/dependencies and release a new complete candidate through the normal gates. A scheduled scan cannot run successfully before a public release record and accessible image exist; verify the first real execution explicitly.
 
