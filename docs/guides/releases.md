@@ -123,7 +123,7 @@ If CI finishes before Release Please has created its draft, the publisher correc
 
 If artifact-upload jobs fail on a rerun because the same immutable names already exist, dispatch a **new CI run on the same main SHA**. Let every required check complete in that new run; do not delete or overwrite the prior evidence and do not mix checks from different runs. Expired artifacts require a new complete CI run, not a replacement receipt over invented bytes.
 
-For an unsuccessful transfer, inspect protected job logs and remote identities. Re-dispatch **Release** against the same verified candidate only when the recorded draft remains eligible. A published release, conflicting tag or unverifiable remote asset requires investigation rather than forced replacement.
+For an unsuccessful transfer, inspect protected job logs and remote identities. Registry transport refusals report a fixed phase (authentication, tag read, blob read/start/upload or manifest read/upload) and a bounded HTTP status, for example `Trusted publisher refused: registry phase=blob-upload HTTP=403.` A network failure reports `HTTP=unavailable`; a known integrity refusal reports its fixed `registry_*` code. No remote URL, upload location, response body or credential is included. Check the reported phase and registry authorization or availability before retrying; these diagnostics do not change transfer, integrity or retry rules. Unknown failures retain the generic refusal message. Re-dispatch **Release** against the same verified candidate only when the recorded draft remains eligible. A published release, conflicting tag or unverifiable remote asset requires investigation rather than forced replacement.
 
 ## Rescan the published bytes
 

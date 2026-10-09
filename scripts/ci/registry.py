@@ -17,8 +17,36 @@ PREFIX = '/v2/ryther/ha-wolf-manager/'
 
 MANIFEST_PATH = 'manifests/'
 BLOB_PATH = 'blobs/'
+BLOB_UPLOAD_PATH = 'blobs/uploads/'
 
 OCI_BLOB_PREFIX = 'oci/blobs/sha256/'
+
+
+AUTHENTICATION_PHASE = 'authentication'
+PUBLIC_AUTHENTICATION_PHASE = 'public-authentication'
+DIAGNOSTIC_PHASES = frozenset({AUTHENTICATION_PHASE, PUBLIC_AUTHENTICATION_PHASE, 'tag-read',
+    'manifest-read', 'manifest-upload', 'blob-read', 'blob-start', 'blob-upload', 'request'})
+
+
+class RegistryFailure(v.VerificationError):
+    """Keep the existing refusal code with controlled transport diagnostics."""
+    def __init__(self, code, phase, status=None):
+        super().__init__(code)
+        self.phase = phase
+        self.status = status
+
+
+def request_phase(method, path):
+    relative = path[len(PREFIX):]
+    if method == 'GET' and relative.startswith(MANIFEST_PATH):
+        return 'manifest-read' if relative.startswith(MANIFEST_PATH + 'sha256:') else 'tag-read'
+    for verb, prefix, phase in (('HEAD', BLOB_PATH, 'blob-read'),
+                               ('POST', BLOB_UPLOAD_PATH, 'blob-start'),
+                               ('PUT', BLOB_UPLOAD_PATH, 'blob-upload'),
+                               ('PUT', MANIFEST_PATH, 'manifest-upload')):
+        if method == verb and relative.startswith(prefix):
+            return phase
+    return 'request'
 
 
 def upload_path(url):
@@ -26,7 +54,7 @@ def upload_path(url):
     v.require(not parsed.fragment and not parsed.username and not parsed.password
               and (not parsed.netloc and not parsed.scheme or
                    parsed.scheme == 'https' and parsed.netloc == 'ghcr.io')
-              and parsed.path.startswith(PREFIX + 'blobs/uploads/')
+              and parsed.path.startswith(PREFIX + BLOB_UPLOAD_PATH)
               and '..' not in parsed.path and '\\' not in parsed.path
               and '\r' not in url and '\n' not in url, 'registry_upload_origin')
     return parsed.path + ('?' + parsed.query if parsed.query else '')
@@ -44,8 +72,10 @@ class Registry:
                 result = v.json_bytes(response.read(1024*1024))
             self.token = result.get('token')
             v.require(isinstance(self.token, str) and bool(self.token), 'registry_token')
+        except urllib.error.HTTPError as error:
+            raise RegistryFailure('registry_authentication_failed', AUTHENTICATION_PHASE, error.code) from None
         except OSError:
-            raise v.VerificationError('registry_authentication_failed') from None
+            raise RegistryFailure('registry_authentication_failed', AUTHENTICATION_PHASE) from None
 
     @classmethod
     def anonymous(cls):
@@ -62,8 +92,10 @@ class Registry:
                 result = v.json_bytes(raw)
             registry.token = result.get('token')
             v.require(isinstance(registry.token, str) and bool(registry.token), 'registry_public_token')
+        except urllib.error.HTTPError as error:
+            raise RegistryFailure('registry_public_access_unavailable', PUBLIC_AUTHENTICATION_PHASE, error.code) from None
         except OSError:
-            raise v.VerificationError('registry_public_access_unavailable') from None
+            raise RegistryFailure('registry_public_access_unavailable', PUBLIC_AUTHENTICATION_PHASE) from None
         return registry
 
     def request(self, method, path, data=None, media=None):
@@ -78,9 +110,9 @@ class Registry:
                 return response.status, dict(response.headers), response.read(8*1024*1024+1)
         except urllib.error.HTTPError as error:
             if error.code == 404: return 404, {}, b''
-            raise v.VerificationError('registry_http_failure') from None
+            raise RegistryFailure('registry_http_failure', request_phase(method, path), error.code) from None
         except OSError:
-            raise v.VerificationError('registry_unavailable') from None
+            raise RegistryFailure('registry_unavailable', request_phase(method, path)) from None
 
 
 def header(headers, key):
@@ -95,7 +127,7 @@ def transfer_blob(files, descriptor, request, done):
     data = files[OCI_BLOB_PREFIX + v.parse_digest(digest)]
     status, headers, _ = request('HEAD', PREFIX + BLOB_PATH + digest)
     if status == 404:
-        status, headers, _ = request('POST', PREFIX + 'blobs/uploads/', b'', 'application/octet-stream')
+        status, headers, _ = request('POST', PREFIX + BLOB_UPLOAD_PATH, b'', 'application/octet-stream')
         v.require(status == 202, 'registry_start_upload')
         location = upload_path(header(headers, 'Location'))
         location += ('&' if '?' in location else '?') + 'digest=' + urllib.parse.quote(digest, safe='')
