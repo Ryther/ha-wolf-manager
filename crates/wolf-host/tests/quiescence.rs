@@ -78,7 +78,7 @@ fn native_process_fixture() {
 fn assert_stopped(uid: u32, executables: &[PathBuf]) {
     let result = quiescence::require_stopped(uid, executables);
     if result.is_err() {
-        let mut same_uid = 0;
+        let mut matching_owner_processes = 0;
         let mut owner_errors = 0;
         let mut exe_missing = 0;
         let mut exe_denied = 0;
@@ -102,7 +102,7 @@ fn assert_stopped(uid: u32, executables: &[PathBuf]) {
                 if metadata.uid() != uid {
                     continue;
                 }
-                same_uid += 1;
+                matching_owner_processes += 1;
                 if let Err(error) = std::fs::metadata(directory.join("exe")) {
                     match error.kind() {
                         std::io::ErrorKind::NotFound => exe_missing += 1,
@@ -121,7 +121,7 @@ fn assert_stopped(uid: u32, executables: &[PathBuf]) {
             }
         }
         eprintln!(
-            "quiescence fixture refusal counts: same_uid={same_uid} owner_errors={owner_errors} exe_missing={exe_missing} exe_denied={exe_denied} exe_other={exe_other} comm_errors={comm_errors} zombies={zombies}"
+            "quiescence fixture refusal counts: matching_owner_processes={matching_owner_processes} owner_errors={owner_errors} exe_missing={exe_missing} exe_denied={exe_denied} exe_other={exe_other} comm_errors={comm_errors} zombies={zombies}"
         );
     }
     assert!(
