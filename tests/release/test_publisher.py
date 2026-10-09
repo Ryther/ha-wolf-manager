@@ -239,3 +239,73 @@ class PublisherTests(unittest.TestCase):
         response.status = 202
         with self.assertRaisesRegex(v.VerificationError, 'publisher_api_status'):
             authority.write('PATCH', path, {})
+
+    def test_cli_reports_only_closed_registry_diagnostics(self):
+        from scripts.ci import registry as registry
+        cases = [
+            (v.VerificationError('registry_blob_identity'), 'registry_blob_identity'),
+            (registry.RegistryFailure('registry_http_failure', 'blob-upload', 403), 'registry phase=blob-upload HTTP=403'),
+            (registry.RegistryFailure('registry_authentication_failed', 'authentication', 429), 'registry phase=authentication HTTP=429'),
+        ]
+        for error, expected in cases:
+            with self.subTest(expected=expected), patch.object(p, 'main', side_effect=error):
+                with self.assertRaises(SystemExit) as refused:
+                    p.cli()
+                self.assertIn(expected, str(refused.exception))
+                self.assertIn('Trusted publisher refused', str(refused.exception))
+
+    def test_cli_never_reflects_unknown_errors_or_forged_diagnostics(self):
+        import secrets
+        import urllib.error
+        from scripts.ci import registry as registry
+        private = secrets.token_urlsafe(32)
+        url = 'https://example.invalid/private?token=' + private
+        forged = registry.RegistryFailure('registry_http_failure', 'blob-upload', 403)
+        forged.phase = url
+        forged_status = registry.RegistryFailure('registry_http_failure', 'blob-upload', 403)
+        forged_status.status = private
+        http_error = urllib.error.HTTPError(url, 403, private, {}, None)
+        self.addCleanup(http_error.close)
+        for error in [v.VerificationError(url), RuntimeError(url),
+                      http_error, forged, forged_status,
+                      v.VerificationError('registry_http_failure:' + private)]:
+            with self.subTest(kind=type(error).__name__), patch.object(p, 'main', side_effect=error):
+                with self.assertRaises(SystemExit) as refused:
+                    p.cli()
+                self.assertEqual(str(refused.exception),
+                    'Trusted publisher refused; credentials and raw API errors are not logged.')
+                self.assertNotIn(private, str(refused.exception))
+        with patch.object(p, 'main', side_effect=v.VerificationError('publisher_image_not_public')):
+            with self.assertRaises(SystemExit) as refused:
+                p.cli()
+            self.assertIn('Configure GHCR package visibility as Public', str(refused.exception))
+
+    def test_cli_success_does_not_change_main_result(self):
+        with patch.object(p, 'main') as main:
+            p.cli()
+            main.assert_called_once_with()
+
+    def test_actual_module_cli_refusal_has_no_traceback_or_environment_secret(self):
+        import secrets
+        import subprocess
+        import sys
+        private = secrets.token_urlsafe(24)
+        result = subprocess.run([sys.executable, '-m', 'scripts.ci.publish', '--run-id', '0',
+                                 '--workflow-id', '7', '--output', str(self.output)],
+                                env={**os.environ, 'GITHUB_TOKEN': private}, capture_output=True,
+                                text=True, timeout=5)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stderr.strip(), p.GENERIC_REFUSAL)
+        self.assertEqual(result.stdout, '')
+        self.assertNotIn(private, result.stderr)
+        self.assertFalse(self.output.exists())
+
+    def test_registry_diagnostic_fields_reject_nonclosed_types_and_statuses(self):
+        from scripts.ci import registry as registry
+        for phase, status in [([], 403), (None, 403), ('blob-upload', True),
+                              ('blob-upload', 99), ('blob-upload', 600), ('blob-upload', 403.0)]:
+            error = registry.RegistryFailure('registry_http_failure', phase, status)
+            with self.subTest(phase=phase, status=status):
+                self.assertEqual(p.refusal_message(error), p.GENERIC_REFUSAL)
+        self.assertIn('HTTP=unavailable', p.refusal_message(
+            registry.RegistryFailure('registry_unavailable', 'blob-read')))

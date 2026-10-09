@@ -156,11 +156,45 @@ def main():
     print('Verified eligible candidate' if prepared else 'No coordinated draft release is eligible')
 
 
+GENERIC_REFUSAL = 'Trusted publisher refused; credentials and raw API errors are not logged.'
+REGISTRY_REFUSALS = frozenset({
+    'registry_upload_origin', 'registry_credentials', 'registry_token',
+    'registry_authentication_failed', 'registry_public_token_status', 'registry_public_token_size',
+    'registry_public_token', 'registry_public_access_unavailable', 'registry_path',
+    'registry_http_failure', 'registry_unavailable', 'registry_required_header',
+    'registry_start_upload', 'registry_blob_upload', 'registry_blob_identity',
+    'registry_manifest_identity', 'registry_manifest_status', 'registry_manifest_upload',
+    'registry_subject', 'registry_tag_rebind', 'registry_tag_status',
+    'registry_public_manifest_identity', 'registry_public_subject', 'registry_public_blob_identity'})
+
+
+def refusal_message(error):
+    """Expose only exact known codes and closed transport fields, never remote text."""
+    if not isinstance(error, v.VerificationError):
+        return GENERIC_REFUSAL
+    code = str(error)
+    if code == 'publisher_image_not_public':
+        return 'Verified image is not anonymously readable. Configure GHCR package visibility as Public, then retry the same candidate; the release remains a draft.'
+    if code not in REGISTRY_REFUSALS:
+        return GENERIC_REFUSAL
+    if isinstance(error, r.RegistryFailure):
+        if not isinstance(error.phase, str) or error.phase not in r.DIAGNOSTIC_PHASES or not valid_http_status(error.status):
+            return GENERIC_REFUSAL
+        status = 'unavailable' if error.status is None else str(error.status)
+        return 'Trusted publisher refused: registry phase=' + error.phase + ' HTTP=' + status + '.'
+    return 'Trusted publisher refused: ' + code + '.'
+
+
+def valid_http_status(status):
+    return status is None or (type(status) is int and 100 <= status <= 599)
+
+
+def cli():
+    try:
+        main()
+    except Exception as error:
+        raise SystemExit(refusal_message(error)) from None
+
+
 if __name__ == '__main__':
-    try: main()
-    except v.VerificationError as error:
-        if str(error) == 'publisher_image_not_public':
-            raise SystemExit('Verified image is not anonymously readable. Configure GHCR package visibility as Public, then retry the same candidate; the release remains a draft.')
-        raise SystemExit('Trusted publisher refused; credentials and raw API errors are not logged.')
-    except Exception:
-        raise SystemExit('Trusted publisher refused; credentials and raw API errors are not logged.')
+    cli()
