@@ -62,12 +62,7 @@
 !/.github/ISSUE_TEMPLATE/feature_request.yaml
 !/.github/PULL_REQUEST_TEMPLATE.md
 !/.github/codeql/config.yaml
-!/.github/workflows/candidate.yaml
 !/.github/workflows/docs.yaml
-!/.github/workflows/publish.yaml
-!/.github/workflows/pull-request.yaml
-!/.github/workflows/release-please.yaml
-!/.github/workflows/rescan.yaml
 !/.gitignore
 !/.release-please-manifest.json
 !/AGENTS.md
@@ -370,11 +365,22 @@
 
 !/scripts/ci/evidence_output.py
 !/tests/release/test_evidence_output.py
+
 !/.github/dependabot.yml
 !/.github/workflows/commits.yaml
 !/scripts/ci/commitizen-requirements.txt
+
+!/.github/workflows/ci.yaml
+!/.github/workflows/tests.yaml
+!/.github/workflows/sonar.yaml
+!/.github/workflows/codeql.yaml
+!/.github/workflows/security.yaml
+!/.github/workflows/release.yaml
+!/tests/release/test_workflow_reuse.py
 !/scripts/ci/sonar_aggregate.py
 !/scripts/ci/sonar_community.py
 !/tests/release/test_sonar_routing.py
 !/tests/release/test_sonar_community.py
+!/tests/release/test_security_commands.py
+!/tests/release/test_workflow_trust.py
 !/tests/release/test_host_diagnostics.py

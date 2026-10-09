@@ -1,0 +1,764 @@
+name: Reusable candidate tests
+'on':
+  workflow_call:
+    inputs:
+      ref:
+        description: Exact40hex source commit to validate
+        required: true
+        type: string
+    outputs:
+      subject_artifact:
+        description: Frozen validated native image and host subject
+        value: ${{ jobs.assemble.outputs.artifact }}
+      rust_artifact:
+        description: Rust/Python coverage and Clippy reports
+        value: ${{ jobs.rust.outputs.artifact }}
+      ui_artifact:
+        description: Actual browser coverage and UI report
+        value: ${{ jobs.ui.outputs.artifact }}
+permissions:
+  contents: read
+  actions: read
+env:
+  CANDIDATE_SHA: ${{ inputs.ref }}
+jobs:
+  static-amd64:
+    name: static-amd64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+        ref: ${{ inputs.ref }}
+    - name: Verify exact checkout identity
+      run: |-
+        python - <<'PYREF'
+        import os, re, subprocess
+        expected = os.environ['CANDIDATE_SHA']
+        assert re.fullmatch(r'[0-9a-f]{40}', expected), 'An exact commit SHA is required'
+        assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == expected, 'Checkout differs from requested SHA'
+        PYREF
+    - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e
+      with:
+        version: v0.38.0
+        driver-opts: image=moby/buildkit:v0.34.0@sha256:b059f8d7226d0b326bc871af489a5dddf65e36af4d20d14251b072974d9ee87c
+    - run: sh scripts/ci/native-build.sh amd64
+    - run: |-
+        mkdir -p _tmp/evidence
+        find _tmp/platform -type f -print0 | sort -z | xargs -0 sha256sum > _tmp/evidence/static-amd64-files.sha256
+    - run: python -m scripts.ci.producer report --name static-amd64 --sha "$CANDIDATE_SHA" --scope "Frozen candidate
+        bytes and source SHA; static-amd64" --output _tmp/evidence/static-amd64.json
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: platform-amd64-${{ inputs.ref }}
+        path: _tmp/platform
+        if-no-files-found: error
+        retention-days: 14
+        compression-level: 0
+        include-hidden-files: true
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: evidence-static-amd64-${{ inputs.ref }}
+        path: _tmp/evidence
+        if-no-files-found: error
+        retention-days: 14
+        compression-level: 0
+        include-hidden-files: true
+  static-arm64:
+    name: static-arm64
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+        ref: ${{ inputs.ref }}
+    - name: Verify exact checkout identity
+      run: |-
+        python - <<'PYREF'
+        import os, re, subprocess
+        expected = os.environ['CANDIDATE_SHA']
+        assert re.fullmatch(r'[0-9a-f]{40}', expected), 'An exact commit SHA is required'
+        assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == expected, 'Checkout differs from requested SHA'
+        PYREF
+    - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e
+      with:
+        version: v0.38.0
+        driver-opts: image=moby/buildkit:v0.34.0@sha256:b059f8d7226d0b326bc871af489a5dddf65e36af4d20d14251b072974d9ee87c
+    - run: sh scripts/ci/native-build.sh arm64
+    - run: |-
+        mkdir -p _tmp/evidence
+        find _tmp/platform -type f -print0 | sort -z | xargs -0 sha256sum > _tmp/evidence/static-arm64-files.sha256
+    - run: python -m scripts.ci.producer report --name static-arm64 --sha "$CANDIDATE_SHA" --scope "Frozen candidate
+        bytes and source SHA; static-arm64" --output _tmp/evidence/static-arm64.json
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: platform-arm64-${{ inputs.ref }}
+        path: _tmp/platform
+        if-no-files-found: error
+        retention-days: 14
+        compression-level: 0
+        include-hidden-files: true
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: evidence-static-arm64-${{ inputs.ref }}
+        path: _tmp/evidence
+        if-no-files-found: error
+        retention-days: 14
+        compression-level: 0
+        include-hidden-files: true
+  assemble:
+    needs:
+    - static-amd64
+    - static-arm64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+        ref: ${{ inputs.ref }}
+    - name: Verify exact checkout identity
+      run: |-
+        python - <<'PYREF'
+        import os, re, subprocess
+        expected = os.environ['CANDIDATE_SHA']
+        assert re.fullmatch(r'[0-9a-f]{40}', expected), 'An exact commit SHA is required'
+        assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == expected, 'Checkout differs from requested SHA'
+        PYREF
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: platform-amd64-${{ inputs.ref }}
+        path: _tmp/amd64
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: platform-arm64-${{ inputs.ref }}
+        path: _tmp/arm64
+    - run: |-
+        python -m scripts.ci.producer assemble --amd64 _tmp/amd64 --arm64 _tmp/arm64 --output _tmp/subject
+        python -m scripts.ci.check_subject --bundle _tmp/subject --sha "$CANDIDATE_SHA" --seal
+        python -m scripts.ci.check_subject --bundle _tmp/subject --sha "$CANDIDATE_SHA"
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: candidate-subject-${{ inputs.ref }}
+        path: _tmp/subject
+        if-no-files-found: error
+        retention-days: 14
+        compression-level: 0
+        include-hidden-files: true
+    name: assemble
+    outputs:
+      artifact: candidate-subject-${{ inputs.ref }}
+  rust:
+    name: rust
+    needs:
+    - assemble
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+        ref: ${{ inputs.ref }}
+    - name: Verify exact checkout identity
+      run: |-
+        python - <<'PYREF'
+        import os, re, subprocess
+        expected = os.environ['CANDIDATE_SHA']
+        assert re.fullmatch(r'[0-9a-f]{40}', expected), 'An exact commit SHA is required'
+        assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == expected, 'Checkout differs from requested SHA'
+        PYREF
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: candidate-subject-${{ inputs.ref }}
+        path: _tmp/subject
+    - run: |-
+        mkdir -p _tmp/evidence
+        python -m scripts.ci.check_subject --bundle _tmp/subject --sha "$CANDIDATE_SHA" > _tmp/evidence/subject-binding.json
+    - run: |-
+        rustup toolchain install 1.99.0 --profile minimal --component clippy,rustfmt,llvm-tools-preview
+        rustup default 1.99.0
+    - run: sh scripts/ci/check.sh rust
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: evidence-rust-${{ inputs.ref }}
+        path: _tmp/evidence
+        if-no-files-found: error
+        retention-days: 14
+        compression-level: 0
+        include-hidden-files: true
+      if: always()
+    outputs:
+      artifact: evidence-rust-${{ inputs.ref }}
+  auth-ingress:
+    name: auth-ingress
+    needs:
+    - assemble
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+        ref: ${{ inputs.ref }}
+    - name: Verify exact checkout identity
+      run: |-
+        python - <<'PYREF'
+        import os, re, subprocess
+        expected = os.environ['CANDIDATE_SHA']
+        assert re.fullmatch(r'[0-9a-f]{40}', expected), 'An exact commit SHA is required'
+        assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == expected, 'Checkout differs from requested SHA'
+        PYREF
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: candidate-subject-${{ inputs.ref }}
+        path: _tmp/subject
+    - run: |-
+        mkdir -p _tmp/evidence
+        python -m scripts.ci.check_subject --bundle _tmp/subject --sha "$CANDIDATE_SHA" > _tmp/evidence/subject-binding.json
+    - run: |-
+        rustup toolchain install 1.99.0 --profile minimal --component clippy,rustfmt,llvm-tools-preview
+        rustup default 1.99.0
+    - run: sh scripts/ci/check.sh auth-ingress
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: evidence-auth-ingress-${{ inputs.ref }}
+        path: _tmp/evidence
+        if-no-files-found: error
+        retention-days: 14
+        compression-level: 0
+        include-hidden-files: true
+      if: always()
+  ssh-policy:
+    name: ssh-policy
+    needs:
+    - assemble
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+        ref: ${{ inputs.ref }}
+    - name: Verify exact checkout identity
+      run: |-
+        python - <<'PYREF'
+        import os, re, subprocess
+        expected = os.environ['CANDIDATE_SHA']
+        assert re.fullmatch(r'[0-9a-f]{40}', expected), 'An exact commit SHA is required'
+        assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == expected, 'Checkout differs from requested SHA'
+        PYREF
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: candidate-subject-${{ inputs.ref }}
+        path: _tmp/subject
+    - run: |-
+        mkdir -p _tmp/evidence
+        python -m scripts.ci.check_subject --bundle _tmp/subject --sha "$CANDIDATE_SHA" > _tmp/evidence/subject-binding.json
+    - run: |-
+        rustup toolchain install 1.99.0 --profile minimal --component clippy,rustfmt,llvm-tools-preview
+        rustup default 1.99.0
+    - run: sh scripts/ci/check.sh ssh-policy
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: evidence-ssh-policy-${{ inputs.ref }}
+        path: _tmp/evidence
+        if-no-files-found: error
+        retention-days: 14
+        compression-level: 0
+        include-hidden-files: true
+      if: always()
+  persistence:
+    name: persistence
+    needs:
+    - assemble
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+        ref: ${{ inputs.ref }}
+    - name: Verify exact checkout identity
+      run: |-
+        python - <<'PYREF'
+        import os, re, subprocess
+        expected = os.environ['CANDIDATE_SHA']
+        assert re.fullmatch(r'[0-9a-f]{40}', expected), 'An exact commit SHA is required'
+        assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == expected, 'Checkout differs from requested SHA'
+        PYREF
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: candidate-subject-${{ inputs.ref }}
+        path: _tmp/subject
+    - run: |-
+        mkdir -p _tmp/evidence
+        python -m scripts.ci.check_subject --bundle _tmp/subject --sha "$CANDIDATE_SHA" > _tmp/evidence/subject-binding.json
+    - run: |-
+        rustup toolchain install 1.99.0 --profile minimal --component clippy,rustfmt,llvm-tools-preview
+        rustup default 1.99.0
+    - run: sh scripts/ci/check.sh persistence
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: evidence-persistence-${{ inputs.ref }}
+        path: _tmp/evidence
+        if-no-files-found: error
+        retention-days: 14
+        compression-level: 0
+        include-hidden-files: true
+      if: always()
+  mqtt:
+    name: mqtt
+    needs:
+    - assemble
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+        ref: ${{ inputs.ref }}
+    - name: Verify exact checkout identity
+      run: |-
+        python - <<'PYREF'
+        import os, re, subprocess
+        expected = os.environ['CANDIDATE_SHA']
+        assert re.fullmatch(r'[0-9a-f]{40}', expected), 'An exact commit SHA is required'
+        assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == expected, 'Checkout differs from requested SHA'
+        PYREF
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: candidate-subject-${{ inputs.ref }}
+        path: _tmp/subject
+    - run: |-
+        mkdir -p _tmp/evidence
+        python -m scripts.ci.check_subject --bundle _tmp/subject --sha "$CANDIDATE_SHA" > _tmp/evidence/subject-binding.json
+    - run: |-
+        rustup toolchain install 1.99.0 --profile minimal --component clippy,rustfmt,llvm-tools-preview
+        rustup default 1.99.0
+    - run: sh scripts/ci/check.sh mqtt
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: evidence-mqtt-${{ inputs.ref }}
+        path: _tmp/evidence
+        if-no-files-found: error
+        retention-days: 14
+        compression-level: 0
+        include-hidden-files: true
+      if: always()
+  lifecycle:
+    name: lifecycle
+    needs:
+    - assemble
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+        ref: ${{ inputs.ref }}
+    - name: Verify exact checkout identity
+      run: |-
+        python - <<'PYREF'
+        import os, re, subprocess
+        expected = os.environ['CANDIDATE_SHA']
+        assert re.fullmatch(r'[0-9a-f]{40}', expected), 'An exact commit SHA is required'
+        assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == expected, 'Checkout differs from requested SHA'
+        PYREF
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: candidate-subject-${{ inputs.ref }}
+        path: _tmp/subject
+    - run: |-
+        mkdir -p _tmp/evidence
+        python -m scripts.ci.check_subject --bundle _tmp/subject --sha "$CANDIDATE_SHA" > _tmp/evidence/subject-binding.json
+    - run: |-
+        rustup toolchain install 1.99.0 --profile minimal --component clippy,rustfmt,llvm-tools-preview
+        rustup default 1.99.0
+    - run: sh scripts/ci/check.sh lifecycle
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: evidence-lifecycle-${{ inputs.ref }}
+        path: _tmp/evidence
+        if-no-files-found: error
+        retention-days: 14
+        compression-level: 0
+        include-hidden-files: true
+      if: always()
+  ui:
+    name: ui
+    needs:
+    - assemble
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+        ref: ${{ inputs.ref }}
+    - name: Verify exact checkout identity
+      run: |-
+        python - <<'PYREF'
+        import os, re, subprocess
+        expected = os.environ['CANDIDATE_SHA']
+        assert re.fullmatch(r'[0-9a-f]{40}', expected), 'An exact commit SHA is required'
+        assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == expected, 'Checkout differs from requested SHA'
+        PYREF
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: candidate-subject-${{ inputs.ref }}
+        path: _tmp/subject
+    - run: |-
+        mkdir -p _tmp/evidence
+        python -m scripts.ci.check_subject --bundle _tmp/subject --sha "$CANDIDATE_SHA" > _tmp/evidence/subject-binding.json
+    - run: sh scripts/ci/check.sh ui
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: evidence-ui-${{ inputs.ref }}
+        path: _tmp/evidence
+        if-no-files-found: error
+        retention-days: 14
+        compression-level: 0
+        include-hidden-files: true
+      if: always()
+    outputs:
+      artifact: evidence-ui-${{ inputs.ref }}
+  distro-containers:
+    name: distro-containers
+    needs:
+    - assemble
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+        ref: ${{ inputs.ref }}
+    - name: Verify exact checkout identity
+      run: |-
+        python - <<'PYREF'
+        import os, re, subprocess
+        expected = os.environ['CANDIDATE_SHA']
+        assert re.fullmatch(r'[0-9a-f]{40}', expected), 'An exact commit SHA is required'
+        assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == expected, 'Checkout differs from requested SHA'
+        PYREF
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: candidate-subject-${{ inputs.ref }}
+        path: _tmp/subject
+    - run: |-
+        mkdir -p _tmp/evidence
+        python -m scripts.ci.check_subject --bundle _tmp/subject --sha "$CANDIDATE_SHA" > _tmp/evidence/subject-binding.json
+    - run: sh scripts/ci/check.sh distro-containers
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: evidence-distro-containers-${{ inputs.ref }}
+        path: _tmp/evidence
+        if-no-files-found: warn
+        retention-days: 14
+        compression-level: 0
+        include-hidden-files: true
+      if: always()
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: distro-diagnostics-${{ inputs.ref }}
+        path: _tmp/host-platform
+        if-no-files-found: warn
+        retention-days: 14
+        compression-level: 0
+        include-hidden-files: true
+      if: always()
+  addon-schema:
+    name: addon-schema
+    needs:
+    - assemble
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+        ref: ${{ inputs.ref }}
+    - name: Verify exact checkout identity
+      run: |-
+        python - <<'PYREF'
+        import os, re, subprocess
+        expected = os.environ['CANDIDATE_SHA']
+        assert re.fullmatch(r'[0-9a-f]{40}', expected), 'An exact commit SHA is required'
+        assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == expected, 'Checkout differs from requested SHA'
+        PYREF
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: candidate-subject-${{ inputs.ref }}
+        path: _tmp/subject
+    - run: |-
+        mkdir -p _tmp/evidence
+        python -m scripts.ci.check_subject --bundle _tmp/subject --sha "$CANDIDATE_SHA" > _tmp/evidence/subject-binding.json
+    - run: |-
+        python -m venv _tmp/schema-venv
+        _tmp/schema-venv/bin/pip install jsonschema==4.26.0 PyYAML==6.0.3
+        _tmp/schema-venv/bin/python -m scripts.ci.addon_schema
+        sh scripts/ci/release-metadata.sh
+    - run: sh scripts/ci/check.sh addon-schema
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: evidence-addon-schema-${{ inputs.ref }}
+        path: _tmp/evidence
+        if-no-files-found: error
+        retention-days: 14
+        compression-level: 0
+        include-hidden-files: true
+      if: always()
+  cargo-audit:
+    name: cargo-audit
+    needs:
+    - assemble
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+        ref: ${{ inputs.ref }}
+    - name: Verify exact checkout identity
+      run: |-
+        python - <<'PYREF'
+        import os, re, subprocess
+        expected = os.environ['CANDIDATE_SHA']
+        assert re.fullmatch(r'[0-9a-f]{40}', expected), 'An exact commit SHA is required'
+        assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == expected, 'Checkout differs from requested SHA'
+        PYREF
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: candidate-subject-${{ inputs.ref }}
+        path: _tmp/subject
+    - run: |-
+        mkdir -p _tmp/evidence
+        python -m scripts.ci.check_subject --bundle _tmp/subject --sha "$CANDIDATE_SHA" > _tmp/evidence/subject-binding.json
+    - run: |-
+        rustup toolchain install 1.99.0 --profile minimal --component clippy,rustfmt,llvm-tools-preview
+        rustup default 1.99.0
+    - run: sh scripts/ci/check.sh cargo-audit
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: evidence-cargo-audit-${{ inputs.ref }}
+        path: _tmp/evidence
+        if-no-files-found: error
+        retention-days: 14
+        compression-level: 0
+        include-hidden-files: true
+      if: always()
+  secrets:
+    name: secrets
+    needs:
+    - assemble
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+        ref: ${{ inputs.ref }}
+    - name: Verify exact checkout identity
+      run: |-
+        python - <<'PYREF'
+        import os, re, subprocess
+        expected = os.environ['CANDIDATE_SHA']
+        assert re.fullmatch(r'[0-9a-f]{40}', expected), 'An exact commit SHA is required'
+        assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == expected, 'Checkout differs from requested SHA'
+        PYREF
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: candidate-subject-${{ inputs.ref }}
+        path: _tmp/subject
+    - run: |-
+        mkdir -p _tmp/evidence
+        python -m scripts.ci.check_subject --bundle _tmp/subject --sha "$CANDIDATE_SHA" > _tmp/evidence/subject-binding.json
+    - run: |-
+        python -m scripts.ci.fetch_tool
+        _tmp/tools/gitleaks git --redact --config scripts/ci/gitleaks.toml --report-format json --report-path _tmp/evidence/gitleaks-results.json
+        _tmp/tools/gitleaks dir --redact --config scripts/ci/gitleaks.toml --report-format json --report-path _tmp/evidence/gitleaks-worktree-results.json .
+    - run: python -m scripts.ci.producer report --name secrets --sha "$CANDIDATE_SHA" --scope "Frozen candidate
+        bytes and source SHA; secrets" --output _tmp/evidence/secrets.json
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: evidence-secrets-${{ inputs.ref }}
+        path: _tmp/evidence
+        if-no-files-found: error
+        retention-days: 14
+        compression-level: 0
+        include-hidden-files: true
+      if: always()
+  image-scan-amd64:
+    name: image-scan-amd64
+    needs:
+    - assemble
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+        ref: ${{ inputs.ref }}
+    - name: Verify exact checkout identity
+      run: |-
+        python - <<'PYREF'
+        import os, re, subprocess
+        expected = os.environ['CANDIDATE_SHA']
+        assert re.fullmatch(r'[0-9a-f]{40}', expected), 'An exact commit SHA is required'
+        assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == expected, 'Checkout differs from requested SHA'
+        PYREF
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: candidate-subject-${{ inputs.ref }}
+        path: _tmp/subject
+    - run: |-
+        mkdir -p _tmp/evidence
+        python -m scripts.ci.check_subject --bundle _tmp/subject --sha "$CANDIDATE_SHA" > _tmp/evidence/subject-binding.json
+    - name: Retain raw image findings
+      run: docker run --rm --mount "type=bind,source=$PWD/_tmp/subject/oci,target=/candidate,readonly" --mount "type=bind,source=$PWD/_tmp/evidence,target=/reports"
+        ghcr.io/aquasecurity/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa
+        image --input /candidate --platform linux/amd64 --scanners vuln --severity HIGH,CRITICAL --exit-code 0 --format
+        sarif --output /reports/trivy-amd64.sarif
+    - run: docker run --rm --mount "type=bind,source=$PWD/_tmp/subject/oci,target=/candidate,readonly" --mount "type=bind,source=$PWD/_tmp/evidence,target=/reports"
+        ghcr.io/aquasecurity/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa
+        image --input /candidate --platform linux/amd64 --scanners vuln --severity HIGH,CRITICAL --exit-code 1 --format
+        json --output /reports/trivy-amd64.json
+    - run: python -m scripts.ci.producer report --name image-scan-amd64 --sha "$CANDIDATE_SHA" --scope "Frozen candidate
+        bytes and source SHA; image-scan-amd64" --output _tmp/evidence/image-scan-amd64.json
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: evidence-image-scan-amd64-${{ inputs.ref }}
+        path: _tmp/evidence
+        if-no-files-found: error
+        retention-days: 14
+        compression-level: 0
+        include-hidden-files: true
+      if: always()
+  image-scan-arm64:
+    name: image-scan-arm64
+    needs:
+    - assemble
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+        ref: ${{ inputs.ref }}
+    - name: Verify exact checkout identity
+      run: |-
+        python - <<'PYREF'
+        import os, re, subprocess
+        expected = os.environ['CANDIDATE_SHA']
+        assert re.fullmatch(r'[0-9a-f]{40}', expected), 'An exact commit SHA is required'
+        assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == expected, 'Checkout differs from requested SHA'
+        PYREF
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: candidate-subject-${{ inputs.ref }}
+        path: _tmp/subject
+    - run: |-
+        mkdir -p _tmp/evidence
+        python -m scripts.ci.check_subject --bundle _tmp/subject --sha "$CANDIDATE_SHA" > _tmp/evidence/subject-binding.json
+    - name: Retain raw image findings
+      run: docker run --rm --mount "type=bind,source=$PWD/_tmp/subject/oci,target=/candidate,readonly" --mount "type=bind,source=$PWD/_tmp/evidence,target=/reports"
+        ghcr.io/aquasecurity/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa
+        image --input /candidate --platform linux/arm64 --scanners vuln --severity HIGH,CRITICAL --exit-code 0 --format
+        sarif --output /reports/trivy-arm64.sarif
+    - run: docker run --rm --mount "type=bind,source=$PWD/_tmp/subject/oci,target=/candidate,readonly" --mount "type=bind,source=$PWD/_tmp/evidence,target=/reports"
+        ghcr.io/aquasecurity/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa
+        image --input /candidate --platform linux/arm64 --scanners vuln --severity HIGH,CRITICAL --exit-code 1 --format
+        json --output /reports/trivy-arm64.json
+    - run: python -m scripts.ci.producer report --name image-scan-arm64 --sha "$CANDIDATE_SHA" --scope "Frozen candidate
+        bytes and source SHA; image-scan-arm64" --output _tmp/evidence/image-scan-arm64.json
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: evidence-image-scan-arm64-${{ inputs.ref }}
+        path: _tmp/evidence
+        if-no-files-found: error
+        retention-days: 14
+        compression-level: 0
+        include-hidden-files: true
+      if: always()
+  workflow-lint:
+    name: workflow-lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ inputs.ref }}
+        persist-credentials: false
+        fetch-depth: 0
+    - name: Verify exact checkout identity
+      run: |-
+        python - <<'PYREF'
+        import os, re, subprocess
+        expected = os.environ['CANDIDATE_SHA']
+        assert re.fullmatch(r'[0-9a-f]{40}', expected), 'An exact commit SHA is required'
+        assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == expected, 'Checkout differs from requested SHA'
+        PYREF
+    - run: |-
+        docker run --rm -v "$GITHUB_WORKSPACE:/repo:ro" -w /repo rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+        mkdir -p _tmp/evidence
+    - run: python -m scripts.ci.producer report --name workflow-lint --sha "$CANDIDATE_SHA" --scope "Exact source
+        SHA; workflow-lint" --output _tmp/evidence/workflow-lint.json
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: evidence-workflow-lint-${{ inputs.ref }}
+        path: _tmp/evidence
+        if-no-files-found: error
+        retention-days: 14
+        compression-level: 0
+        include-hidden-files: true
+  docs:
+    name: docs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ inputs.ref }}
+        persist-credentials: false
+        fetch-depth: 0
+    - name: Verify exact checkout identity
+      run: |-
+        python - <<'PYREF'
+        import os, re, subprocess
+        expected = os.environ['CANDIDATE_SHA']
+        assert re.fullmatch(r'[0-9a-f]{40}', expected), 'An exact commit SHA is required'
+        assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == expected, 'Checkout differs from requested SHA'
+        PYREF
+    - run: |-
+        python -m venv _tmp/docs-venv
+        _tmp/docs-venv/bin/python -m pip install --only-binary ':all:' -r docs/requirements.txt
+        _tmp/docs-venv/bin/python -m mkdocs build --strict
+        mkdir -p _tmp/evidence
+    - run: python -m scripts.ci.producer report --name docs --sha "$CANDIDATE_SHA" --scope "Exact source SHA; docs"
+        --output _tmp/evidence/docs.json
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: evidence-docs-${{ inputs.ref }}
+        path: _tmp/evidence
+        if-no-files-found: error
+        retention-days: 14
+        compression-level: 0
+        include-hidden-files: true

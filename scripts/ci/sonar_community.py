@@ -130,7 +130,7 @@ def scanner(args, token):
                 'sonar.sourceEncoding=UTF-8\nsonar.exclusions=**/tests/**,web/tests/**,scripts/ci/addon.schema.json\n'
                 'sonar.rust.clippy.enabled=false\nsonar.qualitygate.wait=true\nsonar.qualitygate.timeout=600\n')
     e.Output(str(args.work) + '/sonar-project.properties').write_file(settings.encode())
-    command = ['docker', 'run', '--rm', '--network', 'host', '--user', str(os.geteuid()) + ':' + str(os.getegid()),
+    command = ['docker', 'run', '--rm', '--memory', '2g', '--cpus', '2', '--network', 'host', '--user', str(os.geteuid()) + ':' + str(os.getegid()),
                '--workdir', str(Path.cwd()), '--mount', 'type=bind,source=' + str(Path.cwd()) + ',target=' + str(Path.cwd()) + ',readonly',
                '--mount', 'type=bind,source=' + str(Path.cwd() / args.work) + ',target=/sonar-work',
                '-e', 'SONAR_TOKEN', '-e', 'SONAR_HOST_URL=' + s.COMMUNITY,
@@ -174,14 +174,14 @@ def main():
     export = commands.add_parser('diagnostics')
     export.add_argument('--project', required=True)
     export.add_argument('--output', required=True, type=Path)
-    export.add_argument('--server-url', choices=('https://sonarcloud.io', s.COMMUNITY), default='https://sonarcloud.io')
+    export.add_argument('--server-url', choices=(s.CLOUD, s.COMMUNITY), default=s.CLOUD)
     args = parser.parse_args()
     try:
         if args.command == 'scan':
             scan(args)
         else:
             output = e.Output(args.output)
-            token = os.environ['SONAR_TOKEN' if args.server_url == 'https://sonarcloud.io' else 'SONAR_LOCAL_TOKEN']
+            token = os.environ['SONAR_TOKEN' if args.server_url == s.CLOUD else 'SONAR_LOCAL_TOKEN']
             with s.server(args.server_url, token):
                 output.write_file(p.encoded(diagnostics(token_fetch, args.project)))
     except Exception:

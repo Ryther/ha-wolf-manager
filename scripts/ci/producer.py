@@ -136,6 +136,7 @@ def publisher_identity(run, workflow_id, workflow_path):
     v.require(isinstance(run, dict) and run.get('event') in ('push', 'workflow_dispatch')
               and run.get('head_branch') == 'main' and run.get('status') == 'completed'
               and run.get('conclusion') == 'success' and run.get('workflow_id') == workflow_id
+              and workflow_path == v.CI_WORKFLOW and v.positive_int(run.get('run_attempt'))
               and run.get('path') in (workflow_path, workflow_path + '@main')
               and run.get('pull_requests') == [] and v.HEX40.fullmatch(run.get('head_sha', '')),
               'publisher_run')
@@ -272,11 +273,11 @@ def main():
             run = authority.get_json('/repos/' + REPOSITORY + '/actions/runs/' + str(args.run_id))
             v.require(run.get('id') == args.run_id and run.get('head_sha') == args.sha
                       and run.get('head_branch') == 'main' and run.get('event') in ('push', 'workflow_dispatch')
-                      and run.get('path') in ('.github/workflows/candidate.yaml', '.github/workflows/candidate.yaml@main'),
+                      and run.get('path') in (v.CI_WORKFLOW, v.CI_WORKFLOW + '@main'),
                       'producer_run_identity')
             workflow_id = run['workflow_id']
         expected = v.Expectations(REPOSITORY, args.sha, metadata(Path.cwd()), args.run_id,
-                                  workflow_id, '.github/workflows/candidate.yaml')
+                                  workflow_id, v.CI_WORKFLOW)
         result = receipt(files, reports, v.json_bytes(files[IMAGE_FILE]), expected,
                          v.json_bytes(args.artifact.read_bytes()))
         output.write_file(encoded(result))

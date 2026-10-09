@@ -1,0 +1,84 @@
+name: Release
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: release
+  cancel-in-progress: false
+jobs:
+  prepare:
+    if: github.repository == 'Ryther/ha-wolf-manager' && github.ref == 'refs/heads/main' && github.event_name ==
+      'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+    - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7
+      with:
+        token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+        config-file: release-please-config.json
+        manifest-file: .release-please-manifest.json
+    permissions:
+      contents: write
+      pull-requests: write
+  verify:
+    if: github.repository == 'Ryther/ha-wolf-manager' && github.ref == 'refs/heads/main' && vars.RELEASE_PUBLISH_ENABLED
+      == 'true' && (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      eligible: ${{ steps.verify.outputs.eligible }}
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ github.workflow_sha }}
+        persist-credentials: false
+    - run: python -m scripts.ci.publish --run-id "$PRODUCER_RUN_ID" --workflow-id "$CI_WORKFLOW_ID" --output _tmp/verified
+      env:
+        PRODUCER_RUN_ID: ${{ github.event.workflow_run.id || inputs.run_id }}
+        GITHUB_TOKEN: ${{ github.token }}
+        CI_WORKFLOW_ID: ${{ vars.CI_WORKFLOW_ID }}
+      id: verify
+    permissions:
+      contents: write
+      actions: read
+    environment: release
+  publish:
+    needs:
+    - verify
+    if: needs.verify.outputs.eligible == 'true'
+    environment: release
+    permissions:
+      contents: write
+      packages: write
+      actions: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ github.workflow_sha }}
+        persist-credentials: false
+    - run: python -m scripts.ci.publish --run-id "$PRODUCER_RUN_ID" --workflow-id "$CI_WORKFLOW_ID" --output _tmp/verified
+        --publish
+      env:
+        PRODUCER_RUN_ID: ${{ github.event.workflow_run.id || inputs.run_id }}
+        GITHUB_TOKEN: ${{ github.token }}
+        RELEASE_PUBLISH_ENABLED: ${{ vars.RELEASE_PUBLISH_ENABLED }}
+        CI_WORKFLOW_ID: ${{ vars.CI_WORKFLOW_ID }}
+'on':
+  workflow_run:
+    workflows:
+    - CI
+    types:
+    - completed
+    branches:
+    - main
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Successful allowlisted CI run ID
+        required: true
+        type: string
+  push:
+    branches:
+    - main

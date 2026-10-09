@@ -1,0 +1,82 @@
+name: Published image security
+permissions:
+  contents: read
+jobs:
+  published-image:
+    name: Published image and lockfile security
+    if: github.repository == 'Ryther/ha-wolf-manager' && github.ref == 'refs/heads/main' && vars.RELEASE_PUBLISH_ENABLED
+      == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      security-events: write
+    env:
+      TRIVY_IMAGE: ghcr.io/aquasecurity/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+    - name: Resolve the immutable public release image
+      id: subject
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -eu
+        mkdir -p _tmp/published _tmp/security
+        tag=$(gh release view --repo Ryther/ha-wolf-manager --json tagName --jq .tagName)
+        gh release download "$tag" --repo Ryther/ha-wolf-manager --pattern publication.json --dir _tmp/published
+        reference=$(python -m scripts.ci.published_subject --record _tmp/published/publication.json --tag "$tag")
+        printf 'image=%s\n' "$reference" >> "$GITHUB_OUTPUT"
+    - name: Scan both published platforms and the current Cargo lockfile
+      env:
+        IMAGE_REFERENCE: ${{ steps.subject.outputs.image }}
+      run: |
+        set -eu
+        status=0
+        for architecture in amd64 arm64; do
+          docker run --rm \
+            --mount "type=bind,source=$PWD/_tmp/security,target=/reports" \
+            "$TRIVY_IMAGE" image --cache-dir /reports/cache --platform "linux/$architecture" \
+            --scanners vuln --severity HIGH,CRITICAL --exit-code 1 \
+            --format sarif --output "/reports/image-$architecture.sarif" \
+            "$IMAGE_REFERENCE" || status=1
+        done
+        docker run --rm \
+          --mount "type=bind,source=$PWD/_tmp/security,target=/reports" \
+          --mount "type=bind,source=$PWD/Cargo.lock,target=/repo/Cargo.lock,readonly" \
+          "$TRIVY_IMAGE" fs --cache-dir /reports/cache --scanners vuln --pkg-types library \
+          --severity HIGH,CRITICAL --exit-code 1 --format sarif \
+          --output /reports/rust-dependencies.sarif /repo || status=1
+        exit "$status"
+    - name: Preserve reports even when scanning refuses publication
+      if: always()
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: published-security-${{ github.run_id }}
+        path: |
+          _tmp/security/*.sarif
+        if-no-files-found: warn
+        retention-days: 30
+    - name: Upload AMD64 findings
+      if: always() && hashFiles('_tmp/security/image-amd64.sarif') != ''
+      uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2
+      with:
+        sarif_file: _tmp/security/image-amd64.sarif
+        category: published-image-amd64
+    - name: Upload ARM64 findings
+      if: always() && hashFiles('_tmp/security/image-arm64.sarif') != ''
+      uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2
+      with:
+        sarif_file: _tmp/security/image-arm64.sarif
+        category: published-image-arm64
+    - name: Upload lockfile findings
+      if: always() && hashFiles('_tmp/security/rust-dependencies.sarif') != ''
+      uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2
+      with:
+        sarif_file: _tmp/security/rust-dependencies.sarif
+        category: rust-dependencies
+'on':
+  schedule:
+  - cron: 31 6 * * 1
+  workflow_dispatch: null

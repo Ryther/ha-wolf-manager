@@ -27,7 +27,7 @@ python /trusted/scripts/ci/verify_candidate.py \
   --version "$TRUSTED_RELEASE_VERSION" \
   --run-id "$TRUSTED_RUN_ID" \
   --workflow-id "$ALLOWLISTED_WORKFLOW_ID" \
-  --workflow-path .github/workflows/candidate.yaml
+  --workflow-path .github/workflows/ci.yaml
 ```
 
 `GITHUB_TOKEN` must be a job-scoped read-only authority credential. The tool
@@ -112,7 +112,10 @@ startup, actual security scans or live GitHub/GHCR publication.
 
 ## Implemented workflow commands
 
-`candidate.yaml` runs only on trusted `main` pushes or dispatches. Native
+`ci.yaml` is the canonical CI caller for main pushes, PRs and manual dispatches.
+It calls reusable `tests.yaml`, `codeql.yaml` and `sonar.yaml`; main publication
+also requires `commits.yaml`. Only a completed successful main push/dispatch is
+eligible for release authority. PR evidence cannot authorize publication. Native
 `static-amd64` and `static-arm64` jobs compile both binaries once using the
 pinned musl builder. `native-build.sh` validates ELF linkage and versions and
 packages prebuilt bytes through the root `FROM scratch` Dockerfile. Buildx
@@ -133,9 +136,11 @@ unrelated runner processes without weakening the production refusal policy.
 platform manifests without changing their bytes. `check_subject.py` seals and
 verifies the full subject file map, host ELFs, archive checksums and OCI graph.
 
-Every subsequent quality job first receives the uniquely named subject
-artifact, verifies its original ZIP against GitHub's digest and checks that the
-source checkout and full subject manifest match the same SHA. Independent
+Every subsequent quality job receives the uniquely named subject through the
+pinned same-run artifact Action and checks that the source checkout and full
+subject manifest match the same SHA. The protected receiver independently
+retains original ZIP bytes and verifies their GitHub API size/digest; extracted
+same-run downloads do not certify the original ZIP. Independent
 named jobs run Rust tests/coverage, authentication, SSH policy, persistence,
 MQTT broker fixtures, lifecycle, Chromium UI fixtures, seven disposable Linux
 container families, add-on schema, Cargo audit, Gitleaks, CodeQL and per-platform
@@ -171,26 +176,42 @@ not direct-OS, systemd PID1, GPU or streaming certification. Browser API fixture
 remain simulated. Local verifier tests use synthetic ELF and independent API
 fixtures; they do not certify native ARM execution or remote publication.
 
-`sonar` imports actual workspace LCOV and Clippy reports, waits for the quality
-gate, then independently binds the task's analysis ID to the full SHA and
-requires imported nonempty coverage. Concurrent newer project analyses cause a
-refusal rather than borrowing their measures. Quality gate policy must be
-configured and verified in the actual Sonar project.
+`sonar.yaml` imports actual Rust LCOV/Clippy, browser JavaScript LCOV and Python
+XML from the matching CI source. All PRs use an isolated Community server without
+the project's `SONAR_TOKEN`; trusted main uses Cloud. Its required **Sonar Cloud**
+aggregate validates the selected route and completed exact-SHA import proof.
+Missing or failed scanner/report evidence fails the aggregate, even if another
+cached project gate is OK. Both routes retain the stronger CE task, revision,
+latest-analysis and per-file coverage checks. Community success cannot certify a
+Cloud publication gate. Scanner diagnostics are retained after failure without
+making a success receipt.
 
-`candidate-receipt` collects successful evidence, uploads the final immutable
-bundle, downloads its original ZIP and finalizes the separate receipt against
-actual artifact metadata. The first producer run does not need a pre-existing
-workflow-ID variable; the publisher independently requires an administrator's
-allowlisted ID. `pull-request.yaml` runs the corresponding 16 checks with read
-permissions and no Sonar or release secret references. Its artifacts cannot
-authorize publication.
+The semantic receipt keys are distinct from the closed GitHub job-name authority:
+all tests checks require `tests / <semantic-key>`, except `codeql` requires
+`codeql / codeql`, `sonar` requires `sonar / Sonar Cloud`, and `commits` requires
+`commits / Conventional Commits`. The 20 required keys include `docs`,
+`workflow-lint` and `commits` alongside all existing runtime/security checks.
+See the [complete map](../../docs/guides/releases.md#inspect-the-exact-ci-artifacts).
+Unknown caller aliases, duplicate semantic identities, missing/failed jobs,
+wrong SHA/run/attempt and changed run evidence refuse publication. Verify these
+exact names against a fresh hosted canary before configuring branch protection.
+
+The main-only final receipt job collects successful evidence, uploads the final
+immutable bundle, downloads its original ZIP and finalizes a separate receipt
+against actual artifact metadata. The CI producer does not need a pre-existing
+workflow-ID variable; the receiver requires the independently allowlisted
+numeric `CI_WORKFLOW_ID`. A receipt cannot choose its own authority. The producer
+run must finish successfully before Release may receive it; an in-progress run
+is refused even when its receipt claims every check passed.
 
 ## Protected publication configuration
 
-`release-please.yaml` uses `RELEASE_PLEASE_TOKEN` and the root coordinated
-configuration to create release PRs and tagged drafts. `publish.yaml` checks out
-`github.workflow_sha`, never the producer SHA, and serializes publication. Its
-first job has read permissions only. The environment-protected publication job
+`release.yaml` uses `RELEASE_PLEASE_TOKEN` only in its main-push preparation job
+with the coordinated Release Please configuration. Its completed-CI receiver
+checks out `github.workflow_sha`, never the producer SHA, and serializes
+publication. The separate event boundary prevents a still-running producer from
+certifying its own completion. Its
+receiver verification job has read permissions only. The environment-protected publication job
 repeats the verification before granting its token to the closed transfer code.
 Candidate archive contents are never executed with publication credentials.
 
@@ -198,9 +219,9 @@ Configure and independently verify these settings before enabling publication:
 
 - Secrets: `RELEASE_PLEASE_TOKEN`, `SONAR_TOKEN`.
 - Variables: `SONAR_ORGANIZATION`, `SONAR_PROJECT_KEY`, numeric
-  `CANDIDATE_WORKFLOW_ID`, and finally `RELEASE_PUBLISH_ENABLED=true`.
+  `CI_WORKFLOW_ID`, and finally `RELEASE_PUBLISH_ENABLED=true`.
 - Protected `main`, required independent checks and the `release` environment.
-- Sonar Rust coverage/quality policy and GHCR package permission/public visibility.
+- Sonar mixed-language coverage/quality policy and GHCR package permission/public visibility.
 
 The publisher retrieves run identity, coordinated version, draft release and
 resolved tag commit independently. Unrelated main pushes without a release
@@ -241,4 +262,4 @@ The [official Rust analyzer documentation](https://docs.sonarsource.com/sonarqub
 
 ## Published-image rescan
 
-`rescan.yaml` runs Mondays at 06:31 UTC or by manual dispatch, gated by `main`, the canonical repository and `RELEASE_PUBLISH_ENABLED=true`. It reads the latest public release's `publication.json`; `published_subject.py` validates version, SHA/run identity and the two platform descriptors before returning the fixed GHCR repository's immutable index reference. Trivy scans both platforms at that digest and fails HIGH/CRITICAL findings. Reports are retained for 30 days, including failed-scan output when available. This workflow never rebuilds or republishes candidate bytes. Before the first public release, missing release metadata/image access is a real unmet prerequisite rather than a successful scan. See the [public release runbook](../../docs/guides/releases.md).
+`security.yaml` runs Mondays at 06:31 UTC or by manual dispatch, gated by `main`, the canonical repository and `RELEASE_PUBLISH_ENABLED=true`. It reads the latest public release's `publication.json`; `published_subject.py` validates version, SHA/run identity and the two platform descriptors before returning the fixed GHCR repository's immutable index reference. Trivy scans the current lockfile and both platforms at that digest and fails HIGH/CRITICAL findings. Reports are retained for 30 days, including failed-scan output when available. This workflow never rebuilds or republishes candidate bytes. Before the first public release, missing release metadata/image access is a real unmet prerequisite rather than a successful scan. See the [public release runbook](../../docs/guides/releases.md).

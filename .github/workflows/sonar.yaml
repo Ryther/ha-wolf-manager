@@ -1,0 +1,196 @@
+name: Sonar quality
+'on':
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        required: true
+    secrets:
+      SONAR_TOKEN:
+        required: false
+permissions:
+  contents: read
+  actions: read
+env:
+  CANDIDATE_SHA: ${{ inputs.ref }}
+jobs:
+  cloud:
+    name: Cloud analysis
+    if: github.event_name != 'pull_request' && github.repository == 'Ryther/ha-wolf-manager' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    outputs:
+      report_present: ${{ steps.report.outcome == 'success' }}
+    steps:
+    - &id001
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ inputs.ref }}
+        fetch-depth: 0
+        persist-credentials: false
+    - &id002
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ github.event.pull_request.base.sha || github.sha }}
+        path: _tmp/trusted
+        persist-credentials: false
+    - &id003
+      name: Verify exact source
+      run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+    - &id004
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: evidence-rust-${{ inputs.ref }}
+        path: _tmp/rust-evidence
+    - &id005
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: evidence-ui-${{ inputs.ref }}
+        path: _tmp/ui-evidence
+    - &id006
+      run: |-
+        test -s _tmp/rust-evidence/rust.lcov
+        test -s _tmp/rust-evidence/clippy.json
+        test -s _tmp/rust-evidence/python.xml
+        test -s _tmp/ui-evidence/javascript.lcov
+    - name: Verify canonical project identity
+      env:
+        SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION }}
+        SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
+      run: |-
+        python - <<'PYCODE'
+        import os
+        from pathlib import Path
+        settings = dict(line.split('=', 1) for line in Path('sonar-project.properties').read_text().splitlines() if line and not line.startswith('#'))
+        assert settings['sonar.organization'] == os.environ['SONAR_ORGANIZATION']
+        assert settings['sonar.projectKey'] == os.environ['SONAR_PROJECT_KEY']
+        PYCODE
+    - uses: SonarSource/sonarqube-scan-action@d209202bc7d53ff1cc128f7f907dac145c9d6ae9
+      env:
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        SONAR_HOST_URL: https://sonarcloud.io
+      with:
+        scannerVersion: 8.1.0.6389
+        args: |-
+          -Dsonar.projectVersion=${{ inputs.ref }}
+          -Dsonar.scm.revision=${{ inputs.ref }}
+          -Dsonar.rust.clippy.enabled=false
+    - name: Verify exact analysis and imported coverage
+      env:
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
+      run: python -I -c "import runpy,sys; sys.path.insert(0, '_tmp/trusted'); runpy.run_module('scripts.ci.sonar_gate',
+        run_name='__main__')" --task .scannerwork/report-task.txt --sha "$CANDIDATE_SHA" --project "$SONAR_PROJECT_KEY"
+        --rust-lcov _tmp/rust-evidence/rust.lcov --javascript-lcov _tmp/ui-evidence/javascript.lcov --python-xml
+        _tmp/rust-evidence/python.xml --output _tmp/evidence/sonar-analysis.json
+    - id: report
+      run: python -m scripts.ci.producer report --name sonar --sha "$CANDIDATE_SHA" --scope "Exact completed Cloud
+        analysis, source revision and Rust/JavaScript/Python imports" --output _tmp/evidence/sonar.json
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: evidence-sonar-${{ inputs.ref }}
+        path: _tmp/evidence
+        if-no-files-found: error
+        retention-days: 14
+    - name: Export bounded analysis findings
+      if: always()
+      env:
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
+      run: python -I -c "import runpy,sys; sys.path.insert(0, '_tmp/trusted'); runpy.run_module('scripts.ci.sonar_community',
+        run_name='__main__')" diagnostics --server-url https://sonarcloud.io --project "$SONAR_PROJECT_KEY" --output
+        _tmp/sonar-diagnostics.json
+    - name: Retain analysis task diagnostics
+      if: always()
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: sonar-cloud-diagnostics-${{ inputs.ref }}
+        path: |-
+          .scannerwork/report-task.txt
+          _tmp/sonar-diagnostics.json
+        if-no-files-found: warn
+        retention-days: 14
+  community:
+    name: Community analysis
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      report_present: ${{ steps.report.outcome == 'success' }}
+    steps:
+    - *id001
+    - *id002
+    - *id003
+    - *id004
+    - *id005
+    - *id006
+    - name: Start disposable Community server
+      run: docker run --detach --name wolf-ci-sonar --memory=5g --cpus=2 --pids-limit=768 --publish 127.0.0.1:9000:9000
+        --env SONAR_ES_BOOTSTRAP_CHECKS_DISABLE=true sonarqube:26.9.0.129388-community@sha256:c0f1160bccfa435db4168c2d7df69af3c3ea7bfeb87395613014048fb33a68c1
+    - name: Wait and establish local administrative credentials
+      run: |-
+        python -I - <<'PYCODE'
+        import base64, json, os, secrets, time, urllib.parse, urllib.request
+        for attempt in range(120):
+            try:
+                with urllib.request.urlopen('http://127.0.0.1:9000/api/system/status', timeout=5) as response:
+                    if json.load(response).get('status') == 'UP':
+                        break
+            except (OSError, ValueError):
+                pass
+            time.sleep(5)
+        else:
+            raise SystemExit('Disposable Community server did not become ready')
+        password = secrets.token_urlsafe(32)
+        body = urllib.parse.urlencode({'login': 'admin', 'previousPassword': 'admin', 'password': password}).encode()
+        request = urllib.request.Request('http://127.0.0.1:9000/api/users/change_password', data=body, headers={'Authorization': 'Basic ' + base64.b64encode(b'admin:admin').decode()})
+        with urllib.request.urlopen(request, timeout=30):
+            pass
+        print('::add-mask::' + password)
+        with open(os.environ['GITHUB_ENV'], 'a') as output:
+            output.write('SONAR_LOCAL_ADMIN_PASSWORD=' + password + '\n')
+        PYCODE
+    - name: Analyze without Cloud credentials
+      env:
+        SONAR_LOCAL_PROJECT: wolf-pr-${{ github.event.pull_request.number }}
+      run: python -I -c "import runpy,sys; sys.path.insert(0, '_tmp/trusted'); runpy.run_module('scripts.ci.sonar_community',
+        run_name='__main__')" scan --project "$SONAR_LOCAL_PROJECT" --sha "$CANDIDATE_SHA" --rust-lcov _tmp/rust-evidence/rust.lcov
+        --javascript-lcov _tmp/ui-evidence/javascript.lcov --python-xml _tmp/rust-evidence/python.xml --work _tmp/community-work
+        --output _tmp/evidence/sonar-analysis.json --diagnostics _tmp/sonar-diagnostics.json
+    - id: report
+      run: test -s _tmp/evidence/sonar-analysis.json
+    - name: Retain controlled diagnostics
+      if: always()
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: sonar-community-diagnostics-${{ inputs.ref }}
+        path: |-
+          _tmp/sonar-diagnostics.json
+          _tmp/community-work/analysis/report-task.txt
+          _tmp/evidence/sonar-analysis.json
+        if-no-files-found: warn
+        retention-days: 14
+    - name: Destroy disposable server
+      if: always()
+      run: docker rm --force --volumes wolf-ci-sonar
+  required:
+    name: Sonar Cloud
+    if: always()
+    needs:
+    - cloud
+    - community
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+    - *id002
+    - name: Require the routed scanner and report
+      env:
+        SONAR_EVENT_NAME: ${{ github.event_name }}
+        SONAR_TRUSTED_PR: 'false'
+        SONAR_COVERAGE_RESULT: success
+        SONAR_CLOUD_RESULT: ${{ needs.cloud.result }}
+        SONAR_COMMUNITY_RESULT: ${{ needs.community.result }}
+        SONAR_REPORT_PRESENT: ${{ needs.cloud.outputs.report_present == 'true' || needs.community.outputs.report_present
+          == 'true' }}
+      run: python -I -c "import runpy,sys; sys.path.insert(0, '_tmp/trusted'); runpy.run_module('scripts.ci.sonar_aggregate',
+        run_name='__main__')"
