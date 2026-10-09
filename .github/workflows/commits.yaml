@@ -1,5 +1,5 @@
 name: Conventional Commits
-true:
+'on':
   workflow_call:
     inputs:
       ref:
