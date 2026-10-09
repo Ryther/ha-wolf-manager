@@ -41,6 +41,18 @@ docker compose -f .devcontainer/compose.yaml exec devcontainer sh .devcontainer/
 docker compose -f .devcontainer/compose.yaml exec devcontainer sh .devcontainer/verify.sh
 ```
 
+`verify.sh` prepares and activates an isolated Python environment, installs the
+locked npm dependencies, and runs formatting, strict workspace Clippy, the full
+Rust workspace suite, explicit private-broker tests, browser tests, Python
+release tests and the strict documentation build. Run it before pushing changes;
+the named Cargo caches make subsequent checks faster. Any failed command stops
+the preflight. It does not require a GitHub token or a push.
+
+This preflight does not run root installer fixtures, distribution containers,
+CodeQL, vulnerability scans or Sonar. Those checks have separate disposable
+environments and tool prerequisites. The required hosted checks still certify
+the exact release commit; local success cannot replace their release evidence.
+
 Inside the container, run affected checks or the regular repository checks:
 
 ```sh
@@ -67,11 +79,10 @@ there is no product database or persistent broker state in this setup.
 
 ## Local acceptance sequence
 
-Start with the isolated environment above. After `post-create.sh`, run the full
-workspace suite as well as the selected integration checks in `verify.sh`:
+Start with the isolated environment above. After `post-create.sh`, run the
+complete routine preflight:
 
 ```sh
-docker compose -f .devcontainer/compose.yaml exec devcontainer cargo test --locked --workspace
 docker compose -f .devcontainer/compose.yaml exec devcontainer sh .devcontainer/verify.sh
 ```
 

@@ -252,3 +252,103 @@ async fn real_startup_bootstrap_required_passes_exec_healthcheck() {
     assert!(ready);
     assert!(healthcheck(&root).is_err());
 }
+
+#[test]
+fn deployment_matrix_requires_one_explicit_transport_and_consistent_broker_secrets() {
+    use clap::Parser;
+    use ha_wolf_manager::runtime::Cli;
+    let valid = [
+        "manager",
+        "--mode",
+        "standalone",
+        "--data",
+        "/tmp/fixture-data",
+        "--public-origin",
+        "https://example.test",
+        "--bootstrap-token-file",
+        "/tmp/fixture-token",
+        "--trusted-proxy",
+        "127.0.0.1",
+        "--mqtt-disabled",
+    ];
+    assert!(Cli::try_parse_from(valid).unwrap().validate().is_ok());
+    for extra in [
+        vec!["--mqtt-host", "127.0.0.1"],
+        vec!["--mqtt-tls"],
+        vec!["--mqtt-ca-file", "/tmp/fixture-ca"],
+        vec!["--mqtt-username", "fixture"],
+        vec!["--mqtt-password-file", "/tmp/fixture-password"],
+        vec!["--mqtt-port", "0"],
+        vec!["--tls-cert-file", "/tmp/cert"],
+        vec!["--tls-cert-file", "/tmp/cert", "--tls-key-file", "/tmp/key"],
+    ] {
+        let mut args = valid.to_vec();
+        args.extend(extra);
+        assert!(Cli::try_parse_from(args).unwrap().validate().is_err());
+    }
+    let mut broker = valid[..valid.len() - 1].to_vec();
+    broker.extend(["--mqtt-host", "127.0.0.1"]);
+    assert!(Cli::try_parse_from(&broker).unwrap().validate().is_ok());
+    for extra in [
+        vec!["--mqtt-username", "fixture"],
+        vec!["--mqtt-ca-file", "/tmp/ca"],
+    ] {
+        let mut args = broker.clone();
+        args.extend(extra);
+        assert!(Cli::try_parse_from(args).unwrap().validate().is_err());
+    }
+    broker.extend([
+        "--mqtt-username",
+        "fixture",
+        "--mqtt-password-file",
+        "/tmp/password",
+        "--mqtt-tls",
+        "--mqtt-ca-file",
+        "/tmp/ca",
+    ]);
+    assert!(Cli::try_parse_from(broker).unwrap().validate().is_ok());
+    for extra in [
+        vec!["--mqtt-disabled"],
+        vec!["--mqtt-host", "127.0.0.1"],
+        vec!["--bootstrap-token-file", "/tmp/token"],
+        vec!["--public-origin", "https://example.test"],
+        vec!["--tls-cert-file", "/tmp/cert"],
+        vec!["--tls-key-file", "/tmp/key"],
+    ] {
+        let mut args = vec!["manager", "--mode", "ingress"];
+        args.extend(extra);
+        assert!(Cli::try_parse_from(args).unwrap().validate().is_err());
+    }
+    assert!(
+        Cli::try_parse_from(["manager", "--data", "relative"])
+            .unwrap()
+            .validate()
+            .is_err()
+    );
+}
+
+#[test]
+fn malformed_tls_and_secret_inputs_are_controlled_and_preserve_bytes() {
+    use ha_wolf_manager::runtime::{client_tls, read_secret, server_tls};
+    use std::{fs, os::unix::fs::PermissionsExt};
+    let t = tempdir().unwrap();
+    let cert = t.path().join("cert.pem");
+    let key = t.path().join("key.pem");
+    fs::write(&cert, b"invalid certificate\n").unwrap();
+    fs::write(&key, b"invalid key\n").unwrap();
+    fs::set_permissions(&key, fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(client_tls(Some(&cert)).is_err());
+    assert!(server_tls(&cert, &key).is_err());
+    fs::write(&cert, include_bytes!("fixtures/tls-cert.pem")).unwrap();
+    assert!(server_tls(&cert, &key).is_err());
+    fs::write(&key, include_bytes!("fixtures/tls-key.pem")).unwrap();
+    assert!(server_tls(&cert, &key).is_ok());
+    let secret = t.path().join("secret");
+    fs::write(&secret, b"preserved").unwrap();
+    fs::set_permissions(&secret, fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(read_secret(&secret, 9).unwrap(), b"preserved");
+    assert!(read_secret(&secret, 8).is_err());
+    fs::set_permissions(&secret, fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(read_secret(&secret, 9).is_err());
+    assert_eq!(fs::read(secret).unwrap(), b"preserved");
+}

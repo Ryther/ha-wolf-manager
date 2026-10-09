@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.2](https://github.com/Ryther/ha-wolf-manager/compare/v0.1.1...v0.1.2) (2026-10-09)
+
+
+### Bug Fixes
+
+* **ci:** preserve exact release metadata when publishing ([0947107](https://github.com/Ryther/ha-wolf-manager/commit/094710720c9b67cb6fd7d0569b177cdc96da426e))
+
 ## [0.1.1](https://github.com/Ryther/ha-wolf-manager/compare/v0.1.0...v0.1.1) (2026-10-09)
 
 

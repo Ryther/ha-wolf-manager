@@ -103,3 +103,94 @@ fn stopped_writer_proof_is_required_before_any_overlay() {
     assert_eq!(grant.read("config").unwrap(), b"original");
     assert!(store.active().unwrap().is_empty());
 }
+
+#[test]
+fn preimage_shape_mismatch_and_pending_overlay_refuse_without_overwriting_data() {
+    let root = tempdir().unwrap();
+    let backup = tempdir().unwrap();
+    fs::set_permissions(backup.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    fs::write(root.path().join("config"), b"original").unwrap();
+    let grant = Grant::open(root.path()).unwrap();
+    let store = TransactionStore::open(backup.path()).unwrap();
+    let overlays = [Overlay {
+        grant: &grant,
+        relative: "config",
+        bytes: b"overlay".to_vec(),
+    }];
+    assert!(
+        hooks::apply_expected(&store, &overlays, &[], || panic!(
+            "invalid shape reached writer check"
+        ))
+        .is_err()
+    );
+    assert_eq!(grant.read("config").unwrap(), b"original");
+    hooks::apply(&store, &overlays, || Ok(())).unwrap();
+    let before = store.active().unwrap();
+    assert!(
+        hooks::apply(
+            &store,
+            &[Overlay {
+                grant: &grant,
+                relative: "config",
+                bytes: b"second overlay".to_vec()
+            }],
+            || Ok(())
+        )
+        .is_err()
+    );
+    assert_eq!(grant.read("config").unwrap(), b"overlay");
+    assert_eq!(store.active().unwrap().len(), before.len());
+    let meta = fs::metadata(root.path()).unwrap();
+    assert!(hooks::restore(&store, &[], || Ok(())).is_err());
+    assert_eq!(grant.read("config").unwrap(), b"overlay");
+    assert_eq!(store.active().unwrap().len(), 1);
+    hooks::restore(&store, &[(root.path(), meta.uid(), meta.gid())], || Ok(())).unwrap();
+    assert_eq!(grant.read("config").unwrap(), b"original");
+    assert!(store.active().unwrap().is_empty());
+}
+
+#[test]
+fn writer_appearing_during_apply_preserves_overlay_and_recovery_until_quiescent() {
+    let root = tempdir().unwrap();
+    let backup = tempdir().unwrap();
+    fs::set_permissions(backup.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    fs::write(root.path().join("first"), b"original one").unwrap();
+    fs::write(root.path().join("second"), b"original two").unwrap();
+    let grant = Grant::open(root.path()).unwrap();
+    let store = TransactionStore::open(backup.path()).unwrap();
+    let calls = std::cell::Cell::new(0);
+    assert!(
+        hooks::apply(
+            &store,
+            &[
+                Overlay {
+                    grant: &grant,
+                    relative: "first",
+                    bytes: b"overlay one".to_vec()
+                },
+                Overlay {
+                    grant: &grant,
+                    relative: "second",
+                    bytes: b"overlay two".to_vec()
+                },
+            ],
+            || {
+                let count = calls.get();
+                calls.set(count + 1);
+                if count >= 2 {
+                    Err(std::io::Error::other("writer appeared"))
+                } else {
+                    Ok(())
+                }
+            }
+        )
+        .is_err()
+    );
+    assert_eq!(grant.read("first").unwrap(), b"overlay one");
+    assert_eq!(grant.read("second").unwrap(), b"original two");
+    assert_eq!(store.active().unwrap().len(), 1);
+    let meta = fs::metadata(root.path()).unwrap();
+    hooks::restore(&store, &[(root.path(), meta.uid(), meta.gid())], || Ok(())).unwrap();
+    assert_eq!(grant.read("first").unwrap(), b"original one");
+    assert!(store.active().unwrap().is_empty());
+}

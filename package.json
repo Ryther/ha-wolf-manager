@@ -1,7 +1,7 @@
 {
   "name": "ha-wolf-manager-development",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2",
   "scripts": {
     "test:ui": "playwright test web/tests"
   },

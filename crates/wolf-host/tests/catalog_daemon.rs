@@ -35,6 +35,102 @@ fn daemon_admission_binds_granted_uid_libraries_and_private_broker() {
     policy.steam_uid += 1;
     assert!(wolf_manager_host::catalog_daemon::Daemon::from_policy(&policy).is_err());
 }
+
+#[test]
+fn malformed_broker_authority_is_refused_without_modifying_secret_bytes() {
+    for (field, value) in [
+        ("host", serde_json::json!("")),
+        ("host", serde_json::json!("reserved.invalid\nother")),
+        ("port", serde_json::json!(0)),
+        ("client_id", serde_json::json!("")),
+        ("client_id", serde_json::json!("bad\u{0}id")),
+        ("pc_name", serde_json::json!("   ")),
+        ("pc_name", serde_json::json!("bad\nname")),
+        ("topic_base", serde_json::json!("bad/#")),
+        ("username_file", serde_json::json!("/tmp/unpaired-user")),
+        ("ca_file", serde_json::json!("/tmp/unencrypted-ca")),
+        ("unknown", serde_json::json!(true)),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let p = policy(&temp);
+        let path = p.broker_secret_file.as_ref().unwrap();
+        let mut config: serde_json::Value =
+            serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        config[field] = value;
+        let bytes = serde_json::to_vec(&config).unwrap();
+        fs::write(path, &bytes).unwrap();
+        assert!(
+            load_broker(path, rustix::process::geteuid().as_raw()).is_err(),
+            "accepted {field}"
+        );
+        assert_eq!(fs::read(path).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn corrupt_owned_scope_or_unsafe_lock_never_replaces_recovery_evidence() {
+    for malformed in [
+        serde_json::json!({"version":2,"pc_id":"daemon-test","app_ids":[]}),
+        serde_json::json!({"version":1,"pc_id":"other","app_ids":[]}),
+        serde_json::json!({"version":1,"pc_id":"daemon-test","app_ids":["12","12"]}),
+        serde_json::json!({"version":1,"pc_id":"daemon-test","app_ids":["13","12"]}),
+        serde_json::json!({"version":1,"pc_id":"daemon-test","app_ids":[],"unexpected":true}),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let p = policy(&temp);
+        let path = p.catalog_state_directory.join("owned.json");
+        let bytes = serde_json::to_vec(&malformed).unwrap();
+        fs::write(&path, &bytes).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(wolf_manager_host::catalog_daemon::Daemon::from_policy(&p).is_err());
+        assert_eq!(fs::read(path).unwrap(), bytes);
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let p = policy(&temp);
+    let lock = p.catalog_state_directory.join("daemon.lock");
+    fs::write(&lock, b"retained lock bytes").unwrap();
+    fs::set_permissions(&lock, fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(wolf_manager_host::catalog_daemon::Daemon::from_policy(&p).is_err());
+    assert_eq!(fs::read(&lock).unwrap(), b"retained lock bytes");
+    fs::set_permissions(&lock, fs::Permissions::from_mode(0o600)).unwrap();
+    fs::hard_link(&lock, temp.path().join("alias-lock")).unwrap();
+    assert!(wolf_manager_host::catalog_daemon::Daemon::from_policy(&p).is_err());
+    assert_eq!(fs::read(&lock).unwrap(), b"retained lock bytes");
+    fs::remove_file(temp.path().join("alias-lock")).unwrap();
+    let daemon = wolf_manager_host::catalog_daemon::Daemon::from_policy(&p).unwrap();
+    assert!(
+        wolf_manager_host::catalog_daemon::Daemon::from_policy(&p).is_err(),
+        "admitted concurrent writer"
+    );
+    drop(daemon);
+    assert!(wolf_manager_host::catalog_daemon::Daemon::from_policy(&p).is_ok());
+}
+
+#[tokio::test]
+async fn invalid_scan_intervals_refuse_and_shutdown_interrupts_connect_without_publication() {
+    use std::time::Duration;
+    use wolf_manager_host::catalog_daemon::Daemon;
+    let temp = tempfile::tempdir().unwrap();
+    let p = policy(&temp);
+    for interval in [Duration::ZERO, Duration::from_secs(3601)] {
+        assert!(
+            Daemon::from_policy(&p)
+                .unwrap()
+                .serve(interval, std::future::pending())
+                .await
+                .is_err()
+        );
+        assert!(!p.catalog_state_directory.join("owned.json").exists());
+        assert!(!p.catalog_state_directory.join("published.json").exists());
+    }
+    Daemon::from_policy(&p)
+        .unwrap()
+        .serve(Duration::from_secs(30), async {})
+        .await
+        .unwrap();
+    assert!(!p.catalog_state_directory.join("owned.json").exists());
+    assert!(!p.catalog_state_directory.join("published.json").exists());
+}
 async fn packet(stream: &mut tokio::net::TcpStream) -> std::io::Result<(u8, Vec<u8>)> {
     use tokio::io::AsyncReadExt;
     let h = stream.read_u8().await?;

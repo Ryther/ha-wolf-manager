@@ -156,3 +156,24 @@ class SubjectTests(unittest.TestCase):
             report['runs'][0]['invocations'] = [{'executionSuccessful': True,
                 field: [{'level': 'warning'}, {'level': 'note'}]}]
             self.assertEqual(s.sarif_gate([encoded(report)]), 1)
+
+    def test_seal_and_verify_cli_bind_checkout_and_refuse_resealing(self):
+        files, _, _, _, receipt = fixture()
+        files = {name: data for name, data in files.items() if not name.startswith('evidence/')}
+        files['image.json'] = encoded(receipt['image'])
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = Path(directory) / 'bundle'; p.write_tree(bundle, files)
+            argv = ['check_subject', '--bundle', str(bundle), '--sha', SHA]
+            with mock.patch.object(sys, 'argv', argv + ['--seal']), mock.patch.object(p, 'metadata', return_value='0.1.0'):
+                runpy.run_module('scripts.ci.check_subject', run_name='__main__')
+            sealed = (bundle / 'subject.json').read_bytes()
+            with self.assertRaisesRegex(v.VerificationError, 'subject_already_sealed'):
+                c.seal(bundle, SHA)
+            self.assertEqual((bundle / 'subject.json').read_bytes(), sealed)
+            with mock.patch.object(sys, 'argv', argv), mock.patch.object(c.subprocess, 'check_output', return_value=SHA + '\n'), \
+                 mock.patch('sys.stdout', new_callable=io.StringIO) as output:
+                runpy.run_module('scripts.ci.check_subject', run_name='__main__')
+            self.assertEqual(__import__('json').loads(output.getvalue())['candidate_sha'], SHA)
+            with mock.patch.object(c.subprocess, 'check_output', return_value='b' * 40), \
+                 self.assertRaisesRegex(v.VerificationError, 'subject_checkout'):
+                c.verify(bundle, SHA)

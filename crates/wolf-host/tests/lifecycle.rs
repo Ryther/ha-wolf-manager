@@ -212,3 +212,117 @@ fn active_start_still_requires_the_requested_stage_and_consistent_observations()
     assert!(lifecycle::start(&mut f, &expected).is_err());
     assert!(f.events.is_empty());
 }
+
+struct Observations {
+    statuses: std::collections::VecDeque<HostStatus>,
+    events: Vec<&'static str>,
+}
+impl Backend for Observations {
+    fn status(&mut self) -> Result<HostStatus, SafeError> {
+        Ok(self.statuses.pop_front().expect("unexpected observation"))
+    }
+    fn start(&mut self) -> Result<(), SafeError> {
+        self.events.push("start");
+        Ok(())
+    }
+    fn stop(&mut self) -> Result<(), SafeError> {
+        self.events.push("stop");
+        Ok(())
+    }
+}
+
+#[test]
+fn restart_requires_stopped_observation_and_unchanged_stage_before_start() {
+    let original = fake().status;
+    let revision = original.staged_revision.clone().unwrap();
+    for failure in [
+        "recovery",
+        "active",
+        "running",
+        "changed-stage",
+        "recovery-after-stop",
+    ] {
+        let mut stopped = original.clone();
+        match failure {
+            "recovery" => stopped.recovery_pending = true,
+            "active" => stopped.systemd_state = "active".into(),
+            "running" => stopped.container_state = "running".into(),
+            _ => {}
+        }
+        let mut rechecked = original.clone();
+        if failure == "changed-stage" {
+            rechecked.staged_revision = Some(Revision::new("b".repeat(64)).unwrap());
+        }
+        if failure == "recovery-after-stop" {
+            rechecked.recovery_pending = true;
+        }
+        let mut backend = Observations {
+            statuses: [original.clone(), stopped, rechecked].into(),
+            events: vec![],
+        };
+        assert_eq!(
+            lifecycle::restart(&mut backend, &revision)
+                .unwrap_err()
+                .code(),
+            ErrorCode::UnknownInterrupted
+        );
+        assert_eq!(backend.events, ["stop"], "unsafe restart: {failure}");
+    }
+    let mut running = original.clone();
+    running.systemd_state = "active".into();
+    running.container_state = "running".into();
+    running.running_revision = Some(revision.clone());
+    let mut backend = Observations {
+        statuses: [
+            original.clone(),
+            original.clone(),
+            original,
+            running.clone(),
+        ]
+        .into(),
+        events: vec![],
+    };
+    assert_eq!(
+        lifecycle::restart(&mut backend, &revision).unwrap(),
+        running
+    );
+    assert_eq!(backend.events, ["stop", "start"]);
+}
+
+#[test]
+fn submitted_start_without_exact_running_revision_remains_uncertain() {
+    let original = fake().status;
+    let expected = original.staged_revision.clone().unwrap();
+    for failure in [
+        "wrong-running",
+        "wrong-staged",
+        "not-active",
+        "not-running",
+        "recovery",
+    ] {
+        let mut result = original.clone();
+        result.systemd_state = "active".into();
+        result.container_state = "running".into();
+        result.running_revision = Some(expected.clone());
+        match failure {
+            "wrong-running" => {
+                result.running_revision = Some(Revision::new("b".repeat(64)).unwrap())
+            }
+            "wrong-staged" => result.staged_revision = None,
+            "not-active" => result.systemd_state = "failed".into(),
+            "not-running" => result.container_state = "exited".into(),
+            _ => result.recovery_pending = true,
+        }
+        let mut backend = Observations {
+            statuses: [original.clone(), result].into(),
+            events: vec![],
+        };
+        assert_eq!(
+            lifecycle::start(&mut backend, &expected)
+                .unwrap_err()
+                .code(),
+            ErrorCode::UnknownInterrupted
+        );
+        assert_eq!(backend.events, ["start"]);
+    }
+}

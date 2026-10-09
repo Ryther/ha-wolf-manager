@@ -63,11 +63,16 @@ not measure browser or Python execution. Measure release scripts with the pinned
 coverage.py and `scripts/ci/python_coverage.ini`; collect real Chromium/Node V8
 execution through `WOLF_UI_COVERAGE=1 npm run test:ui` and
 `scripts/ci/browser_coverage.cjs`. Candidate publication requires imported
-coverage for every measured language and at least 80% combined project coverage.
+coverage for every measured language, at least 90% combined project coverage,
+and at least 85% for each Rust crate, JavaScript and Python separately.
 Line coverage does not establish crash safety or branch coverage.
 
 Run focused meaningful checks during development and affected required checks
-before completion. Browser API fixtures prove the browser contract; they do not
+before completion. Before pushing, run the routine container preflight with
+`docker compose -f .devcontainer/compose.yaml exec -T devcontainer sh .devcontainer/verify.sh`.
+It includes the ordinary workspace, private-broker, UI, Python and documentation
+checks; root fixtures and security/coverage scanners remain separately required
+where affected. Browser API fixtures prove the browser contract; they do not
 prove live backend, Home Assistant or streaming compatibility. Root installer
 fixtures require their documented disposable environment and explicit opt-in.
 Container syntax checks do not establish direct-OS, GPU or streaming support.

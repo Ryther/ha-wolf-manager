@@ -8,13 +8,15 @@ from scripts.ci import evidence_output as e, verify_candidate as v
 MAX_REPORT = e.MAX_REPORT
 ARCHITECTURES = ('amd64', 'arm64')
 BLOB_PREFIX = 'oci/blobs/sha256/'
+OCI_MANIFESTS = 'manifests'
+IMAGE_RECEIPT = 'image.json'
 
 
 def selected(files, image, architecture):
     v.require(architecture in ARCHITECTURES, 'trivy_architecture')
     v.verify_oci(files, image)
     index = v.json_bytes(files[BLOB_PREFIX + v.parse_digest(image['index_digest'])])
-    descriptors = [p for p in index['manifests'] if p['platform']['architecture'] == architecture]
+    descriptors = [p for p in index[OCI_MANIFESTS] if p['platform']['architecture'] == architecture]
     v.require(len(descriptors) == 1, 'trivy_platform')
     descriptor = descriptors[0]
     manifest = v.json_bytes(files[BLOB_PREFIX + v.parse_digest(descriptor['digest'])])
@@ -25,7 +27,7 @@ def selector(files, image, architecture):
     descriptor, _ = selected(files, image, architecture)
     manifest = v.json_bytes(files[BLOB_PREFIX + v.parse_digest(descriptor['digest'])])
     result = {'oci-layout': files['oci/oci-layout'], 'index.json': json.dumps(
-        {'schemaVersion': 2, 'manifests': [descriptor]}, sort_keys=True, separators=(',', ':')).encode()}
+        {'schemaVersion': 2, OCI_MANIFESTS: [descriptor]}, sort_keys=True, separators=(',', ':')).encode()}
     for item in [descriptor, manifest['config'], *manifest['layers']]:
         name = 'blobs/sha256/' + v.parse_digest(item['digest'])
         result[name] = files['oci/' + name]
@@ -129,20 +131,20 @@ def read_blob(root, files, descriptor, limit):
 
 def read_graph(root):
     files = {name: read_file(root, name, MAX_REPORT)
-             for name in ('image.json', 'oci/oci-layout', 'oci/index.json')}
+             for name in (IMAGE_RECEIPT, 'oci/oci-layout', 'oci/index.json')}
     index = v.json_bytes(files['oci/index.json'])
-    v.require(isinstance(index, dict) and isinstance(index.get('manifests'), list)
-              and len(index['manifests']) == 1, 'trivy_input_index')
-    graph = v.json_bytes(read_blob(root, files, index['manifests'][0], MAX_REPORT))
-    v.require(isinstance(graph, dict) and isinstance(graph.get('manifests'), list)
-              and len(graph['manifests']) == 2, 'trivy_input_platforms')
-    for platform in graph['manifests']:
+    v.require(isinstance(index, dict) and isinstance(index.get(OCI_MANIFESTS), list)
+              and len(index[OCI_MANIFESTS]) == 1, 'trivy_input_index')
+    graph = v.json_bytes(read_blob(root, files, index[OCI_MANIFESTS][0], MAX_REPORT))
+    v.require(isinstance(graph, dict) and isinstance(graph.get(OCI_MANIFESTS), list)
+              and len(graph[OCI_MANIFESTS]) == 2, 'trivy_input_platforms')
+    for platform in graph[OCI_MANIFESTS]:
         manifest = v.json_bytes(read_blob(root, files, platform, MAX_REPORT))
         v.require(isinstance(manifest, dict) and isinstance(manifest.get('layers'), list)
                   and len(manifest['layers']) <= 1000, 'trivy_input_manifest')
         read_blob(root, files, manifest.get('config'), MAX_REPORT)
         for layer in manifest['layers']: read_blob(root, files, layer, v.MAX_FILE)
-    v.verify_oci(files, v.json_bytes(files['image.json']))
+    v.verify_oci(files, v.json_bytes(files[IMAGE_RECEIPT]))
     return files
 
 
@@ -168,7 +170,7 @@ def main():
         else: child.add_argument('--report', type=Path, required=True)
     args = parser.parse_args()
     try:
-        files = read_candidate(args.candidate); image = v.json_bytes(files['image.json'])
+        files = read_candidate(args.candidate); image = v.json_bytes(files[IMAGE_RECEIPT])
         if args.command == 'select':
             e.Output(args.output).write_tree(selector(files, image, args.architecture))
         else:

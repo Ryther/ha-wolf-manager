@@ -156,6 +156,105 @@ class CommunityTests(unittest.TestCase):
             with self.subTest(response=response), self.assertRaises(v.VerificationError):
                 c.pages(lambda *_: response, '/api/issues/search', {}, 'issues')
 
+    def test_scan_retains_sanitized_diagnostics_and_revokes_token_on_gate_failure(self):
+        from scripts.ci import sonar_community as c
+        from contextlib import nullcontext
+        previous = Path.cwd()
+        self.addCleanup(os.chdir, previous)
+        with tempfile.TemporaryDirectory() as directory:
+            os.chdir(directory)
+            Path('_tmp').mkdir(mode=0o700)
+            args = argparse.Namespace(project='example', sha='1' * 40,
+                output=Path('_tmp/result.json'), diagnostics=Path('_tmp/diagnostics.json'),
+                rust_lcov=Path('_tmp/rust'), javascript_lcov=Path('_tmp/js'), python_xml=Path('_tmp/python'))
+            issued = set()
+            credential = secrets.token_urlsafe(32)
+            def api(path, params=None, post=False):
+                if path == '/api/projects/create': return {}
+                if path == '/api/user_tokens/generate':
+                    issued.add(params['name']); return {'token': credential}
+                issued.remove(params['name']); return {}
+            safe = {'issues': [{'rule': 'python:S1', 'path': '', 'line': 1, 'severity': 'MAJOR'}], 'hotspots': []}
+            with patch.object(c, 'LocalAdmin', return_value=api), patch.object(c, 'ready'), \
+                 patch.object(c.s, 'server', return_value=nullcontext()), \
+                 patch.object(c, 'scanner', return_value=Path('_tmp/task')), \
+                 patch.object(c.s, 'verify', side_effect=v.VerificationError('synthetic_gate')), \
+                 patch.object(c, 'diagnostics', return_value=safe):
+                with self.assertRaisesRegex(v.VerificationError, 'synthetic_gate'):
+                    c.scan(args)
+            self.assertEqual(issued, set())
+            self.assertEqual(json.loads(args.diagnostics.read_bytes()), safe)
+            self.assertFalse(args.output.exists())
+            self.assertNotIn(credential, args.diagnostics.read_text())
+
+    def test_scan_success_writes_verified_receipt_and_diagnostics_before_revocation(self):
+        from scripts.ci import sonar_community as c
+        from contextlib import nullcontext
+        previous = Path.cwd()
+        self.addCleanup(os.chdir, previous)
+        with tempfile.TemporaryDirectory() as directory:
+            os.chdir(directory); Path('_tmp').mkdir(mode=0o700)
+            token = secrets.token_urlsafe(32)
+            events = []
+            def api(path, params=None, post=False):
+                events.append(path)
+                return {'token': token} if path.endswith('/generate') else {}
+            argv = ['sonar_community', 'scan', '--project', 'example', '--sha', '1' * 40]
+            for name, value in [('rust-lcov', '_tmp/rust'), ('javascript-lcov', '_tmp/js'),
+                                ('python-xml', '_tmp/python'), ('work', '_tmp/work'),
+                                ('output', '_tmp/result.json'), ('diagnostics', '_tmp/diagnostics.json')]:
+                argv += ['--' + name, value]
+            verified = {'candidate_sha': '1' * 40, 'coverage': 95}
+            with patch('sys.argv', argv), patch.object(c, 'LocalAdmin', return_value=api), \
+                 patch.object(c, 'ready'), patch.object(c.s, 'server', return_value=nullcontext()), \
+                 patch.object(c, 'scanner', return_value=Path('_tmp/task')), \
+                 patch.object(c.s, 'verify', return_value=verified), \
+                 patch.object(c, 'diagnostics', return_value={'issues': [], 'hotspots': []}):
+                c.main()
+            self.assertEqual(json.loads(Path('_tmp/result.json').read_bytes()), verified)
+            self.assertEqual(json.loads(Path('_tmp/diagnostics.json').read_bytes()), {'issues': [], 'hotspots': []})
+            self.assertEqual(events[-1], '/api/user_tokens/revoke')
+            self.assertNotIn(token, Path('_tmp/result.json').read_text())
+
+    def test_readiness_retries_transient_response_loss_and_has_bounded_timeout(self):
+        from scripts.ci import sonar_community as c
+        with patch.object(c.time, 'sleep') as sleep:
+            responses = iter([OSError('response lost'), {'status': 'STARTING'}, {'status': 'UP'}])
+            def api(_):
+                response = next(responses)
+                if isinstance(response, Exception): raise response
+                return response
+            c.ready(api)
+            self.assertEqual(sleep.call_count, 2)
+            sleep.reset_mock()
+            with self.assertRaisesRegex(v.VerificationError, 'sonar_local_not_ready'):
+                c.ready(lambda _: {'status': 'STARTING'})
+            self.assertEqual(sleep.call_count, 120)
+
+    def test_diagnostics_cli_writes_safe_report_and_refuses_remote_secret_error(self):
+        from scripts.ci import sonar_community as c
+        from contextlib import nullcontext
+        import sys
+        previous = Path.cwd()
+        self.addCleanup(os.chdir, previous)
+        with tempfile.TemporaryDirectory() as directory:
+            os.chdir(directory); Path('_tmp').mkdir(mode=0o700)
+            secret = secrets.token_urlsafe(32)
+            argv = ['sonar_community', 'diagnostics', '--project', 'example', '--output', '_tmp/result.json']
+            with patch.object(sys, 'argv', argv), patch.dict(os.environ, {'SONAR_TOKEN': secret}), \
+                 patch.object(c.s, 'server', return_value=nullcontext()) as server, \
+                 patch.object(c, 'diagnostics', return_value={'issues': [], 'hotspots': []}):
+                c.main()
+                server.assert_called_once_with(c.s.CLOUD, secret)
+            self.assertEqual(json.loads(Path('_tmp/result.json').read_bytes()), {'issues': [], 'hotspots': []})
+            with patch.object(sys, 'argv', argv[:-1] + ['_tmp/refused.json']), \
+                 patch.dict(os.environ, {'SONAR_TOKEN': secret}), \
+                 patch.object(c.s, 'server', side_effect=OSError(secret)):
+                with self.assertRaises(SystemExit) as refused:
+                    c.main()
+            self.assertNotIn(secret, str(refused.exception))
+            self.assertFalse(Path('_tmp/refused.json').exists())
+
 
 if __name__ == '__main__':
     unittest.main()

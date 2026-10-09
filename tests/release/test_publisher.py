@@ -70,7 +70,7 @@ class PublisherTests(unittest.TestCase):
             if native_omission:
                 # Native API observed omission: a draft update without tag_name loses its association.
                 response['tag_name'] = value.get('tag_name', 'untagged-native-omission')
-                response['target_commitish'] = value.get('target_commitish', 'main')
+                response['target_commitish'] = value.get('target_commitish', SHA)
             return mutate(response) if mutate else response
         self.authority.write = write
         return prepared, writes
@@ -175,3 +175,67 @@ class PublisherTests(unittest.TestCase):
                 with patch('scripts.ci.registry.Registry') as registry:
                     with self.assertRaises(v.VerificationError): self.prepare()
                     registry.assert_not_called()
+
+    def test_cli_eligibility_output_and_publication_switch_are_distinct(self):
+        import sys
+        import secrets
+        token = secrets.token_urlsafe(24)
+        for prepared, enabled in [(None, False), (('verified',), False), (('verified',), True)]:
+            with self.subTest(prepared=bool(prepared), enabled=enabled):
+                output = Path(self.directory.name) / ('output-' + str(bool(prepared)) + str(enabled))
+                argv = ['publish', '--run-id', '99', '--workflow-id', '7', '--output', str(self.output)]
+                if enabled: argv.append('--publish')
+                with patch.object(sys, 'argv', argv), patch.dict(os.environ, {
+                    'GITHUB_TOKEN': token, 'GITHUB_OUTPUT': str(output), 'RELEASE_PUBLISH_ENABLED': 'true'}), \
+                     patch.object(p, 'GitHub', return_value=self.authority), \
+                     patch.object(p, 'prepare', return_value=prepared), \
+                     patch.object(p, 'publish') as publication, patch('sys.stdout', new_callable=io.StringIO):
+                    p.main()
+                self.assertEqual(output.read_text(), 'eligible=' + ('true' if prepared else 'false') + '\n')
+                self.assertEqual(publication.call_count, int(bool(prepared) and enabled))
+        with patch.object(sys, 'argv', argv), patch.dict(os.environ, {'RELEASE_PUBLISH_ENABLED': 'false'}), \
+             patch.object(p, 'GitHub') as authority:
+            with self.assertRaisesRegex(v.VerificationError, 'publisher_disabled'): p.main()
+            authority.assert_not_called()
+
+    def test_annotated_tag_chain_is_resolved_but_cycles_and_other_objects_refuse(self):
+        from unittest.mock import Mock
+        tag = '2' * 40
+        authority = Mock()
+        authority.get_json.side_effect = [{'object': {'type': 'tag', 'sha': tag}},
+                                          {'object': {'type': 'commit', 'sha': SHA}}]
+        self.assertEqual(p.tag_commit(authority, '0.1.0'), SHA)
+        self.assertTrue(authority.get_json.call_args.args[0].endswith('/git/tags/' + tag))
+        authority.get_json.side_effect = None
+        for value, error in [({'type': 'tag', 'sha': tag}, 'release_tag_depth'),
+                             ({'type': 'tree', 'sha': tag}, 'release_tag_object'),
+                             ({'type': 'commit', 'sha': 'invalid'}, 'release_tag_sha')]:
+            authority.get_json.return_value = {'object': value}
+            with self.subTest(value=value), self.assertRaisesRegex(v.VerificationError, error):
+                p.tag_commit(authority, '0.1.0')
+
+    def test_native_api_write_uses_closed_endpoint_and_authenticated_json_or_asset(self):
+        import secrets
+        from unittest.mock import Mock
+        authority = p.GitHub(REPO, secrets.token_urlsafe(24))
+        response = Mock(status=201)
+        response.read.return_value = encoded({'id': 1})
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        authority.opener = Mock()
+        authority.opener.open.return_value = response
+        path = '/repos/' + REPO + '/releases/1'
+        self.assertEqual(authority.write('PATCH', path, {'draft': False}), {'id': 1})
+        request = authority.opener.open.call_args.args[0]
+        self.assertEqual(request.full_url, 'https://api.github.com' + path)
+        self.assertEqual(request.data, encoded({'draft': False}))
+        authority.write('POST', path + '/assets?name=example', raw=b'exact bytes')
+        request = authority.opener.open.call_args.args[0]
+        self.assertTrue(request.full_url.startswith('https://uploads.github.com/'))
+        self.assertEqual(request.data, b'exact bytes')
+        for unsafe in ['/repos/other/project/releases/1', path + '/../private', path + '\n']:
+            with self.assertRaisesRegex(v.VerificationError, 'publisher_api_path'):
+                authority.write('PATCH', unsafe, {})
+        response.status = 202
+        with self.assertRaisesRegex(v.VerificationError, 'publisher_api_status'):
+            authority.write('PATCH', path, {})

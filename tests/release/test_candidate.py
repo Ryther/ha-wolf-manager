@@ -333,5 +333,32 @@ class RemainingBoundaryTests(unittest.TestCase):
         artifacts=self.package([('evil\nfile',b'bad')])
         with self.assertRaisesRegex(v.VerificationError,'archive_path'):self.verify(artifacts)
 
+    def test_actual_verifier_cli_preserves_original_zip_and_refuses_directory_alias(self):
+        import sys
+        import contextlib
+        from unittest.mock import patch
+        artifacts = self.package()
+        receipt = Path(self.temp.name) / 'receipt.json'
+        # Receipt is kept outside the exclusively ZIP artifact directory.
+        bundle = Path(self.temp.name) / 'artifacts'; bundle.mkdir()
+        original = artifacts[42].read_bytes()
+        (bundle / '42.zip').write_bytes(original)
+        receipt.write_bytes(encoded(self.receipt))
+        argv = ['verify_candidate', '--receipt', str(receipt), '--artifacts', str(bundle),
+                '--repository', REPO, '--sha', SHA, '--version', '0.1.0', '--run-id', '99',
+                '--workflow-id', '77', '--workflow-path', '.github/workflows/ci.yaml']
+        with patch.object(sys, 'argv', argv), patch.object(v, 'GitHubAuthority', return_value=self.authority), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            v.main()
+        self.assertEqual(json.loads(output.getvalue())['candidate_sha'], SHA)
+        self.assertEqual((bundle / '42.zip').read_bytes(), original)
+        (bundle / '042.zip').write_bytes(original)
+        with patch.object(sys, 'argv', argv), patch.object(v, 'GitHubAuthority', return_value=self.authority), \
+             contextlib.redirect_stderr(io.StringIO()) as error:
+            with self.assertRaises(SystemExit) as refused: v.main()
+        self.assertEqual(refused.exception.code, 1)
+        self.assertIn('No content was extracted or published', error.getvalue())
+        self.assertEqual((bundle / '42.zip').read_bytes(), original)
+
 if __name__ == '__main__':
     unittest.main()
