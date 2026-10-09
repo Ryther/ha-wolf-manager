@@ -57,7 +57,7 @@ then dispatch a complete fresh **CI** run rather than mixing rerun evidence.
 
 Use conventional commits and review the PR prepared by **Release**. Release Please updates the canonical version, workspace/package metadata, owned Cargo.lock entries, npm lock metadata and add-on version together. Do not bump individual services or independently run a version command.
 
-For this initial repository, the empty release manifest and `initial-version: 0.1.0` prepare a first `0.1.0` release rather than inventing an earlier published release. Review changelog, manifest and every version update before merging the release PR. The configured release is a **draft**, and its `v<version>` tag must resolve to the exact commit of the successful candidate. Tag creation does not authorize publication.
+The initial bootstrap uses an empty manifest and `initial-version: 0.1.0`. After that proposal is merged, subsequent proposals advance the committed manifest according to Conventional Commits. An earlier draft can remain unpublished while a corrected patch is prepared. Review changelog, manifest and every coordinated version update before merging the release PR. The configured release is a **draft**, and its `v<version>` tag must resolve to the exact commit of the successful candidate. Tag creation does not authorize publication.
 
 An ordinary main push also runs CI and builds an immutable tested artifact but is not a publication request unless a matching coordinated draft/tag exists. Never move an existing release tag to make a failed identity check pass.
 
