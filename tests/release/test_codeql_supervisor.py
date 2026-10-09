@@ -129,6 +129,15 @@ class SupervisorCodeqlTests(unittest.TestCase):
             self.assertEqual(check(report), 1)
             self.assertEqual(source.read_bytes(), SOURCE_BYTES)
 
+    def test_nearby_decimal_severity_is_not_the_reviewed_value(self):
+        for severity in ('8.1000000000000001', '8.0999999999999999'):
+            with self.subTest(severity=severity), source_fixture() as source:
+                report = reviewed_report()
+                rule = report['runs'][0]['tool']['extensions'][0]['rules'][0]
+                rule['properties']['security-severity'] = severity
+                with self.assertRaises(v.VerificationError): check(report)
+                self.assertEqual(source.read_bytes(), SOURCE_BYTES)
+
     def test_duplicate_approved_and_unrelated_high_results_refuse(self):
         for mutation in ('same_run', 'separate_reports', 'unrelated_high'):
             with self.subTest(mutation=mutation), source_fixture() as source:

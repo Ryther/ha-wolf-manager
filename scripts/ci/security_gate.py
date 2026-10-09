@@ -1,7 +1,7 @@
 """Fail CodeQL SARIF on high/critical security findings or invalid reports."""
 import argparse
+from decimal import Decimal, InvalidOperation
 import logging
-import math
 import os
 from pathlib import Path
 import stat
@@ -84,10 +84,10 @@ def security_severity(rule):
         return 0.0
     v.require(type(value) in (str, int, float), 'codeql_severity')
     try:
-        severity = float(value)
-    except (TypeError, ValueError):
+        severity = Decimal(str(value))
+    except InvalidOperation:
         raise v.VerificationError('codeql_severity') from None
-    v.require(math.isfinite(severity) and 0 <= severity <= 10, 'codeql_severity')
+    v.require(severity.is_finite() and 0 <= severity <= 10, 'codeql_severity')
     return severity
 
 
@@ -127,7 +127,7 @@ def reviewed_supervisor_source():
 
 
 def reviewed_supervisor_finding(tool, rule, result, severity, level):
-    if (rule['id'] != 'rust/non-https-url' or severity != 8.1 or level != 'warning'
+    if (rule['id'] != 'rust/non-https-url' or severity != Decimal('8.1') or level != 'warning'
             or tool['driver']['name'] != 'CodeQL'
             or component_for(tool, rule_reference(result).get('toolComponent', {}))['name']
             != 'codeql/rust-queries'):
