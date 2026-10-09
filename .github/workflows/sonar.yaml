@@ -143,7 +143,7 @@ jobs:
             time.sleep(5)
         else:
             raise SystemExit('Disposable Community server did not become ready')
-        password = secrets.token_urlsafe(32)
+        password = 'Wf9!' + secrets.token_urlsafe(32)
         body = urllib.parse.urlencode({'login': 'admin', 'previousPassword': 'admin', 'password': password}).encode()
         request = urllib.request.Request('http://127.0.0.1:9000/api/users/change_password', data=body, headers={'Authorization': 'Basic ' + base64.b64encode(b'admin:admin').decode()})
         with urllib.request.urlopen(request, timeout=30):

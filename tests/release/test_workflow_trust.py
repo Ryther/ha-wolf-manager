@@ -1,12 +1,20 @@
 """Regression checks for baseline Sonar authority and protected publication."""
 import copy
+import contextlib
+import io
 import os
 from pathlib import Path
 import shlex
+import secrets
+import string
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
+import urllib.error
+import urllib.parse
+import urllib.request
 
 import yaml
 
@@ -122,6 +130,42 @@ class WorkflowTrustTests(unittest.TestCase):
         bootstrap = next(step for step in workflow('sonar.yaml')['jobs']['community']['steps']
                          if step.get('name') == 'Wait and establish local administrative credentials')
         self.assertTrue(bootstrap['run'].startswith("python -I - <<'PYCODE'"))
+
+    def test_actual_community_bootstrap_satisfies_password_policy_with_all_letters_rng(self):
+        bootstrap = next(step for step in workflow('sonar.yaml')['jobs']['community']['steps']
+                         if step.get('name') == 'Wait and establish local administrative credentials')
+        lines = bootstrap['run'].splitlines()
+        self.assertEqual(lines[0], "python -I - <<'PYCODE'")
+        self.assertEqual(lines[-1], 'PYCODE')
+        source = '\n'.join(lines[1:-1])
+        # A valid URL-safe random draw can contain no digits or punctuation.
+        # Generate that adversarial draw dynamically, without a fixed secret.
+        letters = ''.join(secrets.choice(string.ascii_lowercase) for _ in range(43))
+        changed = []
+        def policy_api(request, timeout):
+            if isinstance(request, str):
+                self.assertEqual(request, 'http://127.0.0.1:9000/api/system/status')
+                return io.BytesIO(b'{"status":"UP"}')
+            self.assertEqual(request.full_url, 'http://127.0.0.1:9000/api/users/change_password')
+            values = urllib.parse.parse_qs(request.data.decode())
+            password = values['password'][0]
+            classes = [any(c.isupper() for c in password), any(c.islower() for c in password),
+                       any(c.isdigit() for c in password), any(not c.isalnum() for c in password)]
+            if len(password) < 12 or not all(classes):
+                raise urllib.error.HTTPError(request.full_url, 400, 'Password policy refusal',
+                                             {}, io.BytesIO(b'{}'))
+            changed.append(password)
+            return io.BytesIO(b'')
+        with tempfile.TemporaryDirectory() as directory:
+            environment = Path(directory) / 'github-env'
+            with patch.dict(os.environ, {'GITHUB_ENV': str(environment)}), \
+                    patch.object(secrets, 'token_urlsafe', return_value=letters), \
+                    patch.object(urllib.request, 'urlopen', side_effect=policy_api), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                exec(compile(source, '<actual-community-bootstrap>', 'exec'), {})
+            self.assertEqual(len(changed), 1)
+            self.assertTrue(changed[0].endswith(letters))
+            self.assertEqual(environment.read_text(), 'SONAR_LOCAL_ADMIN_PASSWORD=' + changed[0] + '\n')
 
     def test_pull_requests_cannot_route_to_cloud_or_receive_cloud_token(self):
         sonar = workflow('sonar.yaml')
