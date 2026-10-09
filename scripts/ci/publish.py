@@ -31,7 +31,7 @@ class GitHub(v.GitHubAuthority):
 
 REPOSITORY_API_PREFIX = '/repos/'
 
-CANDIDATE_WORKFLOW = '.github/workflows/candidate.yaml'
+CANDIDATE_WORKFLOW = v.CI_WORKFLOW
 
 RECEIPT_FILE = 'release-receipt.json'
 

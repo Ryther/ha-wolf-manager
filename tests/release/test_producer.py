@@ -112,17 +112,18 @@ class ProducerTests(unittest.TestCase):
 class PublisherPolicyTests(unittest.TestCase):
     def test_only_successful_main_owned_allowlisted_run_is_eligible(self):
         _, _, run, _, _ = fixture()
-        self.assertEqual(p.publisher_identity(run, 77, '.github/workflows/candidate.yaml'), SHA)
+        self.assertEqual(p.publisher_identity(run, 77, '.github/workflows/ci.yaml'), SHA)
         for key, value in [('event', 'pull_request'), ('head_branch', 'feature'),
-                           ('conclusion', 'failure'), ('workflow_id', 88),
+                           ('conclusion', 'failure'), ('status', 'in_progress'), ('run_attempt', 0),
+                           ('run_attempt', True), ('workflow_id', 88),
                            ('path', '.github/workflows/other.yaml@main'),
                            ('pull_requests', [{}])]:
             changed = copy.deepcopy(run); changed[key] = value
             with self.subTest(key=key), self.assertRaises(v.VerificationError):
-                p.publisher_identity(changed, 77, '.github/workflows/candidate.yaml')
+                p.publisher_identity(changed, 77, '.github/workflows/ci.yaml')
         run['head_repository']['fork'] = True
         with self.assertRaises(v.VerificationError):
-            p.publisher_identity(run, 77, '.github/workflows/candidate.yaml')
+            p.publisher_identity(run, 77, '.github/workflows/ci.yaml')
 
     def test_release_metadata_must_bind_tag_version_commit_and_owned_draft(self):
         release = {'id': 1, 'draft': True, 'prerelease': False, 'tag_name': 'v0.1.0',

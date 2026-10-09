@@ -139,7 +139,8 @@ def scanner(args, token):
                '-Dsonar.working.directory=/sonar-work/analysis', '-Dsonar.projectVersion=' + args.sha,
                '-Dsonar.scm.revision=' + args.sha, '-Dsonar.rust.lcov.reportPaths=' + report_path(args.rust_lcov),
                '-Dsonar.javascript.lcov.reportPaths=' + report_path(args.javascript_lcov),
-               '-Dsonar.python.coverage.reportPaths=' + report_path(args.python_xml)]
+               '-Dsonar.python.coverage.reportPaths=' + report_path(args.python_xml),
+               '-Dsonar.rust.clippyReport.reportPaths=' + report_path(Path(args.rust_lcov).parent / 'clippy.json')]
     # Raw scanner output can contain source snippets; never store or upload it.
     result = subprocess.run(command, env={'PATH': os.defpath, 'SONAR_TOKEN': token},
                             stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT, timeout=900, check=False)

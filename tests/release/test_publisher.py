@@ -58,6 +58,32 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual((self.output / '42.zip').read_bytes(), self.candidate)
         self.assertEqual(v.json_bytes((self.output / 'verification.json').read_bytes())['candidate_sha'], SHA)
 
+    def test_receiver_refuses_old_workflow_and_unfinished_attempt_before_download(self):
+        for changes in [
+            {'path': '.github/workflows/candidate.yaml@main'},
+            {'status': 'in_progress', 'conclusion': None},
+            {'run_attempt': 0},
+            {'run_attempt': True},
+        ]:
+            with self.subTest(changes=changes), patch.dict(self.fixture.authority.run, changes), \
+                    patch('scripts.ci.artifacts.download') as download:
+                with self.assertRaises(v.VerificationError):
+                    p.prepare(self.authority, 99, 77, self.output)
+                download.assert_not_called()
+                self.assertFalse(self.output.exists())
+
+    def test_receiver_refuses_missing_required_reusable_check_before_publication(self):
+        for name in ('docs', 'workflow-lint', 'commits'):
+            with self.subTest(name=name):
+                self.setUp()
+                required_name = candidate_fixture.JOB_NAMES[name]
+                self.fixture.authority.jobs[:] = [j for j in self.fixture.authority.jobs
+                                                  if j['name'] != required_name]
+                with patch('scripts.ci.registry.Registry') as registry:
+                    with self.assertRaisesRegex(v.VerificationError, 'missing_authoritative_check'):
+                        self.prepare()
+                    registry.assert_not_called()
+
     def test_no_release_draft_means_no_download_or_publication(self):
         self.releases = []
         with patch('scripts.ci.artifacts.download') as download:

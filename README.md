@@ -1,5 +1,10 @@
 # HA Wolf Manager
 
+[![CI](https://github.com/Ryther/ha-wolf-manager/actions/workflows/ci.yaml/badge.svg)](https://github.com/Ryther/ha-wolf-manager/actions/workflows/ci.yaml)
+[![CodeQL](https://github.com/Ryther/ha-wolf-manager/actions/workflows/codeql.yaml/badge.svg)](https://github.com/Ryther/ha-wolf-manager/actions/workflows/codeql.yaml)
+[![SonarCloud](https://sonarcloud.io/api/project_badges/measure?project=Ryther_ha-wolf-manager&metric=alert_status)](https://sonarcloud.io/dashboard?id=Ryther_ha-wolf-manager)
+[![Docs](https://github.com/Ryther/ha-wolf-manager/actions/workflows/docs.yaml/badge.svg)](https://github.com/Ryther/ha-wolf-manager/actions/workflows/docs.yaml)
+
 Manage multiple [Wolf](https://github.com/games-on-whales/wolf) PCs from Home
 Assistant or an authenticated standalone dashboard. The Rust manager connects
 through restricted, host-key-pinned SSH. A separate Rust toolkit runs on each PC;
@@ -53,6 +58,13 @@ Start with the [deployment and user guides](docs/guides/index.md). The
 GitHub configuration. The [application-use skill](.agents/skills/ha-wolf-manager-guide/SKILL.md)
 provides the same operational boundaries for AI assistants; Claude uses a
 relative compatibility link.
+
+CI uses reusable Tests, CodeQL and Sonar workflows, with required documentation,
+workflow lint and commit checks. PR analysis uses an isolated Community server;
+trusted main analysis uses SonarCloud. Release Please prepares coordinated drafts,
+and Release independently verifies a completed CI run before publishing its
+original tested bytes. The [release guide](docs/guides/releases.md) explains the
+required live checks and GitHub settings; badges alone do not certify publication.
 
 Read [AGENTS.md](AGENTS.md) for contributor instructions, verification commands
 and security boundaries. [Crate interfaces](docs/development/crate-contract.md),

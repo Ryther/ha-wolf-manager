@@ -13,7 +13,10 @@ import unittest
 import zipfile
 from scripts.ci import verify_candidate as v
 
-CHECKS=('rust','auth-ingress','ssh-policy','persistence','mqtt','lifecycle','ui','distro-containers','static-amd64','static-arm64','addon-schema','codeql','secrets','cargo-audit','image-scan-amd64','image-scan-arm64','sonar')
+CHECKS=('rust','auth-ingress','ssh-policy','persistence','mqtt','lifecycle','ui','distro-containers','static-amd64','static-arm64','addon-schema','codeql','secrets','cargo-audit','image-scan-amd64','image-scan-arm64','sonar','docs','workflow-lint','commits')
+JOB_NAMES = {name: 'tests / ' + name for name in CHECKS}
+JOB_NAMES.update(codeql='codeql / codeql', sonar='sonar / Sonar Cloud',
+                 commits='commits / Conventional Commits')
 SHA='a'*40
 REPO='Ryther/ha-wolf-manager'
 PREFIX='/repos/'+REPO
@@ -42,7 +45,7 @@ class Authority:
     def get_json(self,path):
         self.calls.append(path)
         if path==PREFIX+'/actions/runs/99':return copy.deepcopy(self.run)
-        if path==PREFIX+'/actions/workflows/77':return {'id':77,'path':'.github/workflows/candidate.yaml','state':'active'}
+        if path==PREFIX+'/actions/workflows/77':return {'id':77,'path':'.github/workflows/ci.yaml','state':'active'}
         if path.startswith(PREFIX+'/actions/runs/99/attempts/1/jobs?'):return {'total_count':len(self.jobs),'jobs':copy.deepcopy(self.jobs)}
         if path==PREFIX+'/actions/artifacts/42':return copy.deepcopy(self.artifact)
         if path.startswith(PREFIX+'/actions/runs/99/artifacts?'):return {'total_count':1,'artifacts':[copy.deepcopy(self.artifact)]}
@@ -70,9 +73,9 @@ def fixture():
     files.update(blobs)
     for name in CHECKS:files['evidence/'+name+'.json']=encoded({'name':name,'candidate_sha':SHA,'result':'success'})
     files['oci/index.json']=encoded({'schemaVersion':2,'manifests':[index]});files['oci/oci-layout']=encoded({'imageLayoutVersion':'1.0.0'})
-    expected=v.Expectations(REPO,SHA,'0.1.0',99,77,'.github/workflows/candidate.yaml')
-    run={'id':99,'workflow_id':77,'head_sha':SHA,'head_branch':'main','path':'.github/workflows/candidate.yaml@main','event':'push','status':'completed','conclusion':'success','run_attempt':1,'repository':{'id':1,'full_name':REPO,'fork':False},'head_repository':{'id':1,'full_name':REPO,'fork':False},'pull_requests':[]}
-    jobs=[{'id':i+1,'run_id':99,'head_sha':SHA,'name':name,'status':'completed','conclusion':'success'} for i,name in enumerate(CHECKS)]
+    expected=v.Expectations(REPO,SHA,'0.1.0',99,77,'.github/workflows/ci.yaml')
+    run={'id':99,'workflow_id':77,'head_sha':SHA,'head_branch':'main','path':'.github/workflows/ci.yaml@main','event':'push','status':'completed','conclusion':'success','run_attempt':1,'repository':{'id':1,'full_name':REPO,'fork':False},'head_repository':{'id':1,'full_name':REPO,'fork':False},'pull_requests':[]}
+    jobs=[{'id':i+1,'run_id':99,'head_sha':SHA,'name':JOB_NAMES[name],'status':'completed','conclusion':'success','run_attempt':1} for i,name in enumerate(CHECKS)]
     receipt={'schema_version':1,'candidate_sha':SHA,'version':'0.1.0','workflow_run_id':99,'source_repository':REPO,'target_triples':['x86_64-unknown-linux-musl','aarch64-unknown-linux-musl'],'checks':[{'name':name,'result':'success','candidate_sha':SHA,'scope':'candidate '+name,'evidence_location':'artifact:42/evidence/'+name+'.json'} for name in CHECKS], 'assets':[], 'image':{'repository':'ghcr.io/ryther/ha-wolf-manager','tag':'0.1.0','index_digest':index['digest'],'platforms':[{'os':'linux','architecture':d['platform']['architecture'],'digest':d['digest']} for d in platforms]},'addon':{'slug':'ha_wolf_manager','version':'0.1.0','image_reference':'ghcr.io/ryther/ha-wolf-manager:0.1.0'},'publication_state':'draft'}
     return files,expected,run,jobs,receipt
 
@@ -123,6 +126,71 @@ class CandidateTests(unittest.TestCase):
         artifacts=self.package();raw=encoded(self.receipt);result=self.verify(artifacts,raw)
         self.assertIsInstance(result,dict);self.assertEqual(result['receipt_sha256'],digest(raw));self.assertEqual(result['candidate_sha'],SHA)
         self.assertIn(PREFIX+'/actions/runs/99',self.authority.calls);self.assertIn(PREFIX+'/actions/artifacts/42',self.authority.calls)
+    def test_closed_ci_map_accepts_exact_reusable_jobs_and_new_semantic_boundaries(self):
+        artifacts = self.package()
+        result = self.verify(artifacts)
+        self.assertEqual(result['candidate_sha'], SHA)
+        self.assertTrue({'docs', 'workflow-lint', 'commits'} <= {c['name'] for c in self.receipt['checks']})
+
+    def test_old_producer_workflow_is_not_an_authorized_expectation(self):
+        expected = v.Expectations(REPO, SHA, '0.1.0', 99, 77, '.github/workflows/candidate.yaml')
+        with self.assertRaises(v.VerificationError):
+            expected.validate()
+
+    def test_refuses_unknown_caller_and_extra_semantic_job_alias(self):
+        for mutation in ('wrong-prefix', 'leaf-alias', 'extra-prefix-alias', 'extra-display-alias'):
+            with self.subTest(mutation=mutation):
+                self.setUp()
+                def change():
+                    if mutation == 'wrong-prefix':
+                        self.authority.jobs[0]['name'] = 'untrusted / rust'
+                    else:
+                        extra = copy.deepcopy(self.authority.jobs[0])
+                        extra['id'] = 1001
+                        extra['name'] = {'leaf-alias': 'rust', 'extra-prefix-alias': 'other / rust',
+                                         'extra-display-alias': 'other / Conventional Commits'}[mutation]
+                        self.authority.jobs.append(extra)
+                self.rejected(change)
+
+    def test_all_required_jobs_must_belong_to_current_run_attempt(self):
+        for invalid in (2, True, 1.0, '1'):
+            with self.subTest(attempt=invalid):
+                self.setUp()
+                self.rejected(lambda: self.authority.jobs[0].update(run_attempt=invalid))
+        self.setUp()
+        self.rejected(lambda: self.authority.jobs[0].pop('run_attempt'))
+
+    def test_completed_run_and_new_required_checks_cannot_be_borrowed(self):
+        for status, conclusion in [('in_progress', None), ('completed', 'failure'),
+                                   ('completed', 'cancelled'), ('completed', 'skipped')]:
+            with self.subTest(status=status, conclusion=conclusion):
+                self.setUp()
+                self.rejected(lambda: self.authority.run.update(status=status, conclusion=conclusion))
+        for semantic in ('docs', 'workflow-lint', 'commits'):
+            with self.subTest(semantic=semantic):
+                self.setUp()
+                self.rejected(lambda: self.authority.jobs.__setitem__(slice(None),
+                    [j for j in self.authority.jobs if j['name'] != JOB_NAMES[semantic]]))
+
+    def test_attempt_change_while_collecting_jobs_refuses_stale_success(self):
+        artifacts = self.package()
+        original = self.authority.get_json
+        calls = 0
+        def changing(path):
+            nonlocal calls
+            data = original(path)
+            if path == PREFIX + '/actions/runs/99':
+                calls += 1
+                if calls > 1:
+                    data = copy.deepcopy(data)
+                    data['run_attempt'] = 2
+                    data['status'] = 'in_progress'
+                    data['conclusion'] = None
+            return data
+        self.authority.get_json = changing
+        with self.assertRaisesRegex(v.VerificationError, 'changing_run_evidence'):
+            self.verify(artifacts)
+
     def test_receipt_success_cannot_override_independent_failed_job(self):self.rejected(lambda:self.authority.jobs[0].update(conclusion='failure'))
     def test_refuses_missing_duplicate_and_suffix_ambiguous_job_names(self):
         for mutation in ('missing','duplicate','suffix'):
