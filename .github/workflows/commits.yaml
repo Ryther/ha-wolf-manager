@@ -1,6 +1,5 @@
 name: Conventional Commits
-
-on:
+true:
   workflow_call:
     inputs:
       ref:
@@ -8,51 +7,54 @@ on:
         type: string
         required: false
   pull_request:
-    types: [opened, synchronize, reopened, edited]
+    types:
+    - opened
+    - synchronize
+    - reopened
+    - edited
   push:
-    branches: [main]
-
+    branches:
+    - main
 permissions:
   contents: read
-
 jobs:
   check:
     name: Conventional Commits
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.13.12'
-      - name: Install pinned commit validator
-        run: python -m pip install --only-binary ':all:' --no-deps -r scripts/ci/commitizen-requirements.txt
-      - name: Check pull request title used for squash merge
-        if: github.event_name == 'pull_request'
-        env:
-          PR_TITLE: ${{ github.event.pull_request.title }}
-        run: cz check --message "$PR_TITLE" --allowed-prefixes
-      - name: Check commit messages
-        env:
-          PR_BASE: ${{ github.event.pull_request.base.sha }}
-        run: |
-          if [ -n "$PR_BASE" ]; then
-            cz check --rev-range "$PR_BASE..HEAD"
-          else
-            cz check --rev-range HEAD
-          fi
-      - name: Record checked source
-        env:
-          CHECK_SHA: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
-        run: |
-          test "$(git rev-parse HEAD)" = "$CHECK_SHA"
-          python -m scripts.ci.producer report --name commits --sha "$CHECK_SHA" --scope "Configured Conventional Commit messages for the exact source" --output _tmp/evidence/commits.json
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        with:
-          name: evidence-commits-${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
-          path: _tmp/evidence
-          if-no-files-found: error
-          retention-days: 14
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
+        fetch-depth: 0
+        persist-credentials: false
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      with:
+        python-version: 3.13.12
+    - name: Install pinned commit validator
+      run: python -m pip install --only-binary ':all:' --no-deps -r scripts/ci/commitizen-requirements.txt
+    - name: Check pull request title used for squash merge
+      if: github.event_name == 'pull_request'
+      env:
+        PR_TITLE: ${{ github.event.pull_request.title }}
+      run: cz check --message "$PR_TITLE" --allowed-prefixes
+    - name: Check commit messages
+      env:
+        PR_BASE: ${{ github.event.pull_request.base.sha }}
+      run: "if [ -n \"$PR_BASE\" ]; then\n  cz check --rev-range \"$PR_BASE..HEAD\"\nelse\n  cz check --rev-range HEAD\nfi\n"
+    - name: Record checked source
+      env:
+        CHECK_SHA: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
+      run: 'test "$(git rev-parse HEAD)" = "$CHECK_SHA"
+
+        python -m scripts.ci.producer report --name commits --sha "$CHECK_SHA" --scope "Configured Conventional Commit messages
+        for the exact source" --output _tmp/evidence/commits.json
+
+        '
+      if: inputs.ref != ''
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: evidence-commits-${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
+        path: _tmp/evidence
+        if-no-files-found: error
+        retention-days: 14
+      if: inputs.ref != ''
