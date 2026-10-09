@@ -32,6 +32,10 @@ class SonarCoverageTests(unittest.TestCase):
     def verify(self):
         with patch.object(s,'get',self.api):
             return s.verify(self.task,'example',SHA, self.lcov)
+    def test_missing_report_returns_explicit_controlled_error(self):
+        with self.assertRaisesRegex(v.VerificationError, '^required_report$'):
+            s.report_bytes(None, 'required_report')
+
     def test_mixed_project_coverage_cannot_substitute_for_missing_rust_import(self):
         with self.assertRaises(v.VerificationError):self.verify()
     def test_exact_rust_file_counts_accept_matching_lcov(self):

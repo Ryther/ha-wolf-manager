@@ -367,3 +367,6 @@
 !/vendor/rumqttc/tests/
 !/vendor/rumqttc/tests/broker.rs
 !/vendor/rumqttc/tests/reliability.rs
+
+!/scripts/ci/evidence_output.py
+!/tests/release/test_evidence_output.py

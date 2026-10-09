@@ -104,8 +104,8 @@ PYREADY
     cargo test --locked -p wolf-manager-host --test catalog_mqtt
     ;;
   ui)
-    npm ci
-    npx playwright install --with-deps chromium
+    npm ci --ignore-scripts
+    ./node_modules/.bin/playwright install --with-deps chromium
     WOLF_UI_COVERAGE=1 npm run test:ui -- --workers=1 --reporter=line
     NODE_V8_COVERAGE=_tmp/evidence/node-v8 node scripts/ci/browser_coverage.cjs --browser-only
     node scripts/ci/browser_coverage.cjs

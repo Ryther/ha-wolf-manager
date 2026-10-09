@@ -7,7 +7,7 @@ import re
 import xml.etree.ElementTree as ET
 import urllib.parse
 import urllib.request
-from scripts.ci import producer as p, verify_candidate as v
+from scripts.ci import evidence_output as e, producer as p, verify_candidate as v
 
 
 def get(path):
@@ -19,7 +19,9 @@ def get(path):
 
 
 def report_bytes(path, code):
-    v.require(path is not None and path.is_file() and path.stat().st_size <= 16 * 1024 * 1024, code)
+    if path is None:
+        raise v.VerificationError(code)
+    v.require(path.is_file() and path.stat().st_size <= 16 * 1024 * 1024, code)
     return path.read_bytes()
 
 
@@ -222,7 +224,7 @@ def verify(task_path, project, sha, lcov_path=None, javascript_path=None, python
             'rust_covered_lines': covered_rust, 'rust_lcov_sha256': lcov_digest, **imported}
 
 
-if __name__ == '__main__':
+def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--task', type=Path, required=True)
     parser.add_argument('--sha', required=True)
@@ -233,7 +235,11 @@ if __name__ == '__main__':
     parser.add_argument('--python-xml', type=Path, required=True)
     args = parser.parse_args()
     try:
-        args.output.write_bytes(p.encoded(verify(args.task, args.project, args.sha, args.rust_lcov,
+        e.Output(args.output).write_file(p.encoded(verify(args.task, args.project, args.sha, args.rust_lcov,
                                                args.javascript_lcov, args.python_xml)))
     except Exception:
         raise SystemExit('Sonar exact-candidate gate refused; credentials and raw API errors are not logged.')
+
+
+if __name__ == '__main__':
+    main()
