@@ -12,7 +12,7 @@ An administrator must configure and independently verify the following before en
 | --- | --- |
 | Secret `RELEASE_PLEASE_TOKEN` | Allows the coordinated release workflow to create release PRs and tagged drafts in this repository. Use a repository-scoped identity with the required contents/PR permissions. |
 | Secret `SONAR_TOKEN` | Authenticates trusted main-branch analysis in the configured Sonar project. PR workflows do not receive it. |
-| Variables `SONAR_ORGANIZATION`, `SONAR_PROJECT_KEY` | Select the actual project whose Rust report import and quality-gate policy must be verified. |
+| Variables `SONAR_ORGANIZATION`, `SONAR_PROJECT_KEY` | Must match `sonar.organization` and `sonar.projectKey` in the root `sonar-project.properties`; the job refuses mismatched analysis and verification identities. |
 | Variable `CANDIDATE_WORKFLOW_ID` | Numeric GitHub ID of `.github/workflows/candidate.yaml`, independently confirmed through repository workflow metadata. A receipt cannot select its own trusted workflow. |
 | Environment `release` | Protects the publication job with the repository's chosen approval and main-branch rules. Declaring the environment in YAML alone does not configure protection. |
 | Variable `RELEASE_PUBLISH_ENABLED=true` | Enables the protected publisher and scheduled published-image rescan. Set this last, after the other gates are verified. |
@@ -20,6 +20,11 @@ An administrator must configure and independently verify the following before en
 Protect `main` and require the 16 checks provided by the read-only PR workflow. Sonar is a seventeenth **publication** check on trusted main candidates; it is absent from PR workflows and should not be required as a PR status. Verify GitHub Actions permissions, native ARM runner availability, the release identity's GHCR package permissions and public visibility. An add-on cannot pull a private image without separate access arrangements.
 
 Configure the Sonar project's intended coverage/security policy and disable automatic analysis if it would race the CI analysis. Rust LCOV, actual browser/Node JavaScript LCOV, Python coverage XML and pre-generated Clippy reports are imported by the candidate job. The receiver checks actual per-file metrics for all three languages against the frozen reports, the exact commit and unchanged analysis ID, and refuses combined project coverage below 80%. Generic positive project coverage cannot substitute for verified report ingestion. A real first run must confirm project permissions and importer behavior.
+
+The root `sonar-project.properties` owns the project identity, source scope,
+exclusions, report paths and scanner quality-gate settings. CI supplies only the
+server URL, secret token and exact revision/version dynamically. Never put tokens
+in the properties file.
 
 The [workflow source](https://github.com/Ryther/ha-wolf-manager/tree/main/.github/workflows), [receiver documentation](https://github.com/Ryther/ha-wolf-manager/blob/main/scripts/ci/README.md) and [rollout contract](../contracts/rollout-contract.md) define the detailed trust boundary.
 

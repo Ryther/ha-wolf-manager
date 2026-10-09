@@ -73,6 +73,7 @@
 !/AGENTS.md
 !/CONTRIBUTING.md
 !/Cargo.lock
+!/sonar-project.properties
 !/Cargo.toml
 !/Dockerfile
 !/LICENSE
