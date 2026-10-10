@@ -41,7 +41,7 @@ jobs:
         assert re.fullmatch(r'[0-9a-f]{40}', expected), 'An exact commit SHA is required'
         assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == expected, 'Checkout differs from requested SHA'
         PYREF
-    - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e
+    - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
       with:
         version: v0.38.0
         driver-opts: image=moby/buildkit:v0.34.0@sha256:b059f8d7226d0b326bc871af489a5dddf65e36af4d20d14251b072974d9ee87c
@@ -86,7 +86,7 @@ jobs:
         assert re.fullmatch(r'[0-9a-f]{40}', expected), 'An exact commit SHA is required'
         assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == expected, 'Checkout differs from requested SHA'
         PYREF
-    - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e
+    - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
       with:
         version: v0.38.0
         driver-opts: image=moby/buildkit:v0.34.0@sha256:b059f8d7226d0b326bc871af489a5dddf65e36af4d20d14251b072974d9ee87c
