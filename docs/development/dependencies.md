@@ -110,3 +110,17 @@ strict Clippy, native MQTT TLS certificate acceptance/refusal, and four
 disposable MQTT5 reconnect/discovery/shutdown fixtures passed. These local checks
 do not replace the release candidate's independent native architecture and
 security jobs.
+
+## Host platform fixture images
+
+On 2026-10-13, the previous dated Tumbleweed fixture image stopped resolving from
+`registry.opensuse.org`: its exact digest returned `manifest unknown` on a fresh
+CI runner and an independent pull. The fixture now uses the
+[official openSUSE project publication on Docker Hub](https://hub.docker.com/r/opensuse/tumbleweed),
+with its multiarchitecture index pinned in `tests/host-platform/images.json`.
+The selected AMD64 OBS build is `20261011.37.232`; independent downloads of both
+AMD64 and ARM64 platform images succeeded. This changes only the disposable
+distribution fixture, not the manager, toolkit or upstream Wolf runtime image.
+No Cargo or npm dependency changes accompany the pin update. Registry retention
+remains external; an immutable digest does not guarantee permanent availability.
+See the [fixture scope and verification procedure](https://github.com/Ryther/ha-wolf-manager/blob/main/tests/host-platform/README.md).

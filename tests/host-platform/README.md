@@ -52,25 +52,30 @@ pins only after verifying current stable releases through the listed official
 sources. Arch, CachyOS and Tumbleweed are rolling snapshots; Leap 16.1 was still
 an RC when Leap 16.0 was selected on 2026-10-08.
 
-Tumbleweed uses the official openSUSE registry's dated `20261003` tag and exact
-multiarchitecture index digest. On 2026-10-09, fresh pulls of its AMD64 and ARM64
-manifests succeeded, and the full AMD64 distribution fixture passed with
-OpenSSH 10.5p1, sudo 1.9.17p2 and systemd 261.3. ARM64 pull availability does not
-establish execution of this distribution fixture on ARM64. This six-day-old
-snapshot was selected over the observed `20261005` and `20261006` partial
-indexes, which lacked ARM64; the earlier index selected through `latest` returned
-`404 MANIFEST_UNKNOWN` to a fresh registry request even though a cached local
-image still ran successfully. The registry's [published tags](https://registry.opensuse.org/v2/opensuse/tumbleweed/tags/list)
-identify the selected dated snapshot; Docker Hub's [official project image](https://hub.docker.com/r/opensuse/tumbleweed)
-currently exposes only `latest`, so it is not a dated-tag substitute.
+Tumbleweed uses the [official openSUSE project image on Docker Hub](https://hub.docker.com/r/opensuse/tumbleweed), pinned to the verified multiarchitecture index
+`sha256:c9b84bad846d3af25b12aa2fda81a370126a4926f5bfcb1947a4e36e57e8f3cf`.
+The moving `latest` tag was used only to select this pin on 2026-10-13; fixture
+execution always uses the exact digest. Its AMD64 image identifies the OBS
+build `20261011.37.232`. Both AMD64 and ARM64 image downloads succeeded before
+selection. The complete seven-distribution AMD64 container matrix passed locally
+on 2026-10-13, including Tumbleweed with its real restricted SSH/sudo checks and
+offline unit validation. An ARM64 download does not establish execution of this
+fixture on ARM64.
 
-A dated tag and digest do not guarantee indefinite upstream retention. Verify
-the index and both target manifests remotely, then explicitly pull each target
-platform before accepting an updated pin. A passing test using a cached image
-is insufficient evidence of fresh-runner availability. Package repositories
-remain rolling even when the base snapshot is fixed. The per-image
-`verified_at` records this later Tumbleweed check; the matrix's original date
-and `verified-results.json` remain historical evidence for the earlier cohort.
+The previous openSUSE registry pin used the dated `20261003` tag and digest
+`sha256:e1f12ceed5df529634484933b3fa837869d981e5081e1fbba47dda5a585367f7`.
+Fresh AMD64/ARM64 pulls and its AMD64 fixture passed on 2026-10-09, but on
+2026-10-13 the registry refused that digest with `manifest unknown` before the
+fixture started. A dated tag and immutable digest do not guarantee upstream
+retention. The project-maintained Docker Hub publication is an alternative
+source, not a promise of permanent availability or a fallback to mutable images.
+
+Verify the index and both target manifests remotely, then explicitly pull each
+target platform before accepting an updated pin. A passing test using a cached
+image is insufficient evidence of fresh-runner availability. Package repositories
+remain rolling even when the base snapshot is fixed. The per-image `verified_at`
+records this later Tumbleweed check; the matrix's original date and
+`verified-results.json` remain historical evidence for the earlier cohort.
 
 The first release deliberately refuses pre-existing conditional `Match` blocks
 outside its exact generated fragment, including blocks reached through nested
