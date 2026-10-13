@@ -366,3 +366,192 @@ async fn denied_exec_never_receives_typed_stdin_or_retries_command() {
     assert!(seen.input.is_empty());
     assert!(!seen.exec_accepted);
 }
+
+fn imported_pair() -> (String, String) {
+    let key = PrivateKey::random(&mut russh::keys::key::safe_rng(), Algorithm::Ed25519).unwrap();
+    (
+        key.to_openssh(russh::keys::ssh_key::LineEnding::LF)
+            .unwrap()
+            .to_string(),
+        key.public_key().to_openssh().unwrap(),
+    )
+}
+
+#[test]
+fn import_is_explicit_stable_and_never_replaces_existing_bytes() {
+    let (root, pc) = fixture();
+    assert_eq!(ssh::identity_public_key(root.path(), &pc).unwrap(), None);
+    assert!(!root.path().join("keys/gaming-pc/id_ed25519").exists());
+    let (private, public) = imported_pair();
+    let with_comment = format!("{public} existing user key");
+    assert_eq!(
+        ssh::import_identity(root.path(), &pc, &private, Some(&with_comment)).unwrap(),
+        public
+    );
+    let path = root.path().join("keys/gaming-pc/id_ed25519");
+    let original = fs::read(&path).unwrap();
+    assert_eq!(
+        ssh::import_identity(root.path(), &pc, &private, None).unwrap(),
+        public
+    );
+    assert_eq!(ensure_identity(root.path(), &pc).unwrap(), public);
+    let (different, _) = imported_pair();
+    assert!(ssh::import_identity(root.path(), &pc, &different, None).is_err());
+    assert_eq!(fs::read(&path).unwrap(), original);
+    assert_eq!(
+        fs::metadata(path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+}
+
+#[test]
+fn invalid_import_cannot_create_identity_or_modify_existing_key() {
+    let (root, pc) = fixture();
+    let (private, _) = imported_pair();
+    let (_, other_public) = imported_pair();
+    for (input, public) in [
+        ("malformed".to_owned(), None),
+        ("x".repeat(16 * 1024 + 1), None),
+        (private.clone(), Some(other_public.as_str())),
+    ] {
+        assert!(ssh::import_identity(root.path(), &pc, &input, public).is_err());
+        assert!(!root.path().join("keys/gaming-pc/id_ed25519").exists());
+    }
+    ensure_identity(root.path(), &pc).unwrap();
+    let path = root.path().join("keys/gaming-pc/id_ed25519");
+    let original = fs::read(&path).unwrap();
+    assert!(ssh::import_identity(root.path(), &pc, &private, Some(&other_public)).is_err());
+    assert_eq!(fs::read(&path).unwrap(), original);
+}
+
+#[tokio::test]
+async fn imported_identity_authenticates_native_ssh_without_generation() {
+    let (root, pc) = fixture();
+    let (private, public) = imported_pair();
+    ssh::import_identity(root.path(), &pc, &private, None).unwrap();
+    let original = fs::read(root.path().join("keys/gaming-pc/id_ed25519")).unwrap();
+    let server = server_fixture(
+        pc.clone(),
+        PublicKey::from_openssh(&public).unwrap(),
+        Reply::Valid,
+    )
+    .await;
+    let mut ready = ssh::connect(&server.endpoint, root.path()).await.unwrap();
+    let request = status_request(pc);
+    ready
+        .execute(&request)
+        .await
+        .unwrap()
+        .validate_for(&request)
+        .unwrap();
+    assert!(server.seen.lock().unwrap().auth > 0);
+    assert_eq!(
+        fs::read(root.path().join("keys/gaming-pc/id_ed25519")).unwrap(),
+        original
+    );
+}
+
+#[test]
+fn encrypted_and_non_ed25519_identity_import_is_refused_before_storage() {
+    let (root, pc) = fixture();
+    let mut rng = russh::keys::key::safe_rng();
+    let key = PrivateKey::random(&mut rng, Algorithm::Ed25519).unwrap();
+    let encrypted = key.encrypt(&mut rng, "synthetic-fixture-password").unwrap();
+    let ecdsa = PrivateKey::random(
+        &mut rng,
+        Algorithm::Ecdsa {
+            curve: russh::keys::ssh_key::EcdsaCurve::NistP256,
+        },
+    )
+    .unwrap();
+    for key in [encrypted, ecdsa] {
+        let encoded = key
+            .to_openssh(russh::keys::ssh_key::LineEnding::LF)
+            .unwrap();
+        assert!(ssh::import_identity(root.path(), &pc, &encoded, None).is_err());
+        assert!(!root.path().join("keys").exists());
+    }
+}
+
+#[test]
+fn import_refuses_unsafe_existing_files_without_changing_them() {
+    for alias in [false, true] {
+        let (root, pc) = fixture();
+        ensure_identity(root.path(), &pc).unwrap();
+        let path = root.path().join("keys/gaming-pc/id_ed25519");
+        let original = fs::read(&path).unwrap();
+        if alias {
+            fs::hard_link(&path, root.path().join("alias")).unwrap();
+        } else {
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        let (private, _) = imported_pair();
+        assert!(ssh::identity_public_key(root.path(), &pc).is_err());
+        assert!(ssh::import_identity(root.path(), &pc, &private, None).is_err());
+        assert_eq!(fs::read(path).unwrap(), original);
+    }
+}
+
+#[test]
+fn concurrent_import_and_generation_never_replace_or_expose_partial_identity() {
+    let (root, pc) = fixture();
+    let (private, public) = imported_pair();
+    let barrier = Arc::new(std::sync::Barrier::new(8));
+    let results = std::thread::scope(|scope| {
+        let tasks = (0..8)
+            .map(|index| {
+                let barrier = barrier.clone();
+                let (private, pc, path) = (&private, &pc, root.path());
+                scope.spawn(move || {
+                    barrier.wait();
+                    if index % 2 == 0 {
+                        ssh::import_identity(path, pc, private, None)
+                    } else {
+                        ensure_identity(path, pc)
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        tasks
+            .into_iter()
+            .map(|task| task.join().unwrap())
+            .collect::<Vec<_>>()
+    });
+    let final_key = ssh::identity_public_key(root.path(), &pc).unwrap().unwrap();
+    for success in results.iter().filter_map(|result| result.as_ref().ok()) {
+        assert_eq!(success, &final_key);
+    }
+    assert!(results.iter().any(Result::is_ok));
+    if final_key != public {
+        assert!(ssh::import_identity(root.path(), &pc, &private, None).is_err());
+    }
+    assert_eq!(
+        fs::read_dir(root.path().join("keys/gaming-pc"))
+            .unwrap()
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn identity_fifo_is_refused_without_waiting_for_a_writer() {
+    let (root, pc) = fixture();
+    assert_eq!(ssh::identity_public_key(root.path(), &pc).unwrap(), None);
+    fs::create_dir_all(root.path().join("keys/gaming-pc")).unwrap();
+    for dir in [root.path().join("keys"), root.path().join("keys/gaming-pc")] {
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let path = root.path().join("keys/gaming-pc/id_ed25519");
+    rustix::fs::mknodat(
+        rustix::fs::CWD,
+        &path,
+        rustix::fs::FileType::Fifo,
+        rustix::fs::Mode::from_raw_mode(0o600),
+        0,
+    )
+    .unwrap();
+    assert!(ssh::identity_public_key(root.path(), &pc).is_err());
+    let (private, _) = imported_pair();
+    assert!(ssh::import_identity(root.path(), &pc, &private, None).is_err());
+    assert!(!fs::symlink_metadata(path).unwrap().file_type().is_file());
+}

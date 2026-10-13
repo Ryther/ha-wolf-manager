@@ -238,7 +238,7 @@ async fn live_process_authenticated_configuration_archive_and_offline_recovery()
         StatusCode::UNAUTHORIZED
     );
     let (cookie, csrf) = process.bootstrap().await;
-    let pc = json!({"pc_id":"fixture-pc","display_name":"Fixture PC","ssh_host":"127.0.0.1","ssh_port":9,"ssh_user":"wolf-manager"});
+    let pc = json!({"display_name":"Fixture PC","ssh_host":"127.0.0.1","ssh_port":9,"ssh_user":"wolf-manager"});
     assert_eq!(
         process
             .request(Method::POST, "pcs", pc.clone(), &cookie, "wrong-csrf")
@@ -246,13 +246,12 @@ async fn live_process_authenticated_configuration_archive_and_offline_recovery()
             .status(),
         StatusCode::FORBIDDEN
     );
-    assert_eq!(
-        process
-            .request(Method::POST, "pcs", pc, &cookie, &csrf)
-            .await
-            .status(),
-        StatusCode::CREATED
-    );
+    let created = process
+        .request(Method::POST, "pcs", pc, &cookie, &csrf)
+        .await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created: Value = created.json().await.unwrap();
+    let pc_id = PcId::new(created["pc_id"].as_str().unwrap()).unwrap();
     let pcs: Value = process
         .request(Method::GET, "pcs", json!({}), &cookie, &csrf)
         .await
@@ -260,6 +259,7 @@ async fn live_process_authenticated_configuration_archive_and_offline_recovery()
         .await
         .unwrap();
     assert_eq!(pcs["pcs"].as_array().unwrap().len(), 1);
+    assert_eq!(pcs["pcs"][0]["pc_id"], pc_id.as_str());
     let def = json!({"label":"Fixture option","launch_options":"FIXTURE=1 %command%","description":"Synthetic process fixture"});
     assert_eq!(
         process
@@ -291,7 +291,7 @@ async fn live_process_authenticated_configuration_archive_and_offline_recovery()
     let settings: Value = process
         .request(
             Method::GET,
-            "pcs/fixture-pc/settings",
+            &format!("pcs/{pc_id}/settings"),
             json!({}),
             &cookie,
             &csrf,
@@ -301,7 +301,10 @@ async fn live_process_authenticated_configuration_archive_and_offline_recovery()
         .await
         .unwrap();
     assert_eq!(settings["settings"]["debug"]["test_ball"], true);
-    for path in ["pcs/fixture-pc/status", "pcs/fixture-pc/games"] {
+    for path in [
+        &format!("pcs/{pc_id}/status"),
+        &format!("pcs/{pc_id}/games"),
+    ] {
         assert_eq!(
             process
                 .request(Method::GET, path, json!({}), &cookie, &csrf)
@@ -313,7 +316,7 @@ async fn live_process_authenticated_configuration_archive_and_offline_recovery()
     let history: Value = process
         .request(
             Method::GET,
-            "pcs/fixture-pc/operations?limit=1",
+            &format!("pcs/{pc_id}/operations?limit=1"),
             json!({}),
             &cookie,
             &csrf,
@@ -324,11 +327,11 @@ async fn live_process_authenticated_configuration_archive_and_offline_recovery()
         .unwrap();
     assert_eq!(history["operations"], json!([]));
     for path in [
-        "pcs/fixture-pc/operations?bad=1",
-        "pcs/fixture-pc/operations?limit=no",
-        "pcs/fixture-pc/operations?cursor=bad",
-        "pcs/fixture-pc/logs?bad=1",
-        "pcs/fixture-pc/logs?lines=no",
+        &format!("pcs/{pc_id}/operations?bad=1"),
+        &format!("pcs/{pc_id}/operations?limit=no"),
+        &format!("pcs/{pc_id}/operations?cursor=bad"),
+        &format!("pcs/{pc_id}/logs?bad=1"),
+        &format!("pcs/{pc_id}/logs?lines=no"),
     ] {
         assert!(
             !process
@@ -342,7 +345,7 @@ async fn live_process_authenticated_configuration_archive_and_offline_recovery()
         process
             .request(
                 Method::GET,
-                "pcs/fixture-pc/ssh/public-key",
+                &format!("pcs/{pc_id}/ssh/public-key"),
                 json!({}),
                 &cookie,
                 &csrf
@@ -355,7 +358,7 @@ async fn live_process_authenticated_configuration_archive_and_offline_recovery()
         process
             .request(
                 Method::POST,
-                "pcs/fixture-pc/ssh/probe",
+                &format!("pcs/{pc_id}/ssh/probe"),
                 json!({}),
                 &cookie,
                 &csrf
@@ -368,7 +371,7 @@ async fn live_process_authenticated_configuration_archive_and_offline_recovery()
         !process
             .request(
                 Method::POST,
-                "pcs/fixture-pc/ssh/enroll",
+                &format!("pcs/{pc_id}/ssh/enroll"),
                 json!({"probe_id":uuid::Uuid::new_v4(),"fingerprint":"SHA256:untrusted"}),
                 &cookie,
                 &csrf
@@ -379,19 +382,19 @@ async fn live_process_authenticated_configuration_archive_and_offline_recovery()
     );
     for (path, body) in [
         (
-            "pcs/fixture-pc/service/start",
+            &format!("pcs/{pc_id}/service/start"),
             json!({"expected_desired_revision":settings["desired_revision"]}),
         ),
         (
-            "pcs/fixture-pc/service/restart",
+            &format!("pcs/{pc_id}/service/restart"),
             json!({"expected_desired_revision":settings["desired_revision"]}),
         ),
         (
-            "pcs/fixture-pc/apply",
+            &format!("pcs/{pc_id}/apply"),
             json!({"expected_desired_revision":settings["desired_revision"]}),
         ),
-        ("pcs/fixture-pc/service/stop", json!({})),
-        ("pcs/fixture-pc/ssh/test", json!({})),
+        (&format!("pcs/{pc_id}/service/stop"), json!({})),
+        (&format!("pcs/{pc_id}/ssh/test"), json!({})),
     ] {
         let response = process
             .request(Method::POST, path, body, &cookie, &csrf)
@@ -437,7 +440,7 @@ async fn live_process_authenticated_configuration_archive_and_offline_recovery()
                 .is_success()
         );
     }
-    assert_eq!(process.request(Method::PATCH,"pcs/fixture-pc",json!({"display_name":"Renamed fixture","ssh_host":"127.0.0.1","ssh_port":10,"ssh_user":"wolf-manager"}),&cookie,&csrf).await.status(),StatusCode::OK);
+    assert_eq!(process.request(Method::PATCH,&format!("pcs/{pc_id}"),json!({"display_name":"Renamed fixture","ssh_host":"127.0.0.1","ssh_port":10,"ssh_user":"wolf-manager"}),&cookie,&csrf).await.status(),StatusCode::OK);
     assert_eq!(
         process
             .request(
@@ -453,7 +456,13 @@ async fn live_process_authenticated_configuration_archive_and_offline_recovery()
     );
     assert_eq!(
         process
-            .request(Method::DELETE, "pcs/fixture-pc", json!({}), &cookie, &csrf)
+            .request(
+                Method::DELETE,
+                &format!("pcs/{pc_id}"),
+                json!({}),
+                &cookie,
+                &csrf
+            )
             .await
             .status(),
         StatusCode::NO_CONTENT
@@ -535,7 +544,10 @@ async fn live_broker_runtime_becomes_ready_and_drains_on_sigterm() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     let (cookie, csrf) = process.bootstrap().await;
-    assert_eq!(process.request(Method::POST,"pcs",json!({"pc_id":"broker-pc","display_name":"Broker fixture","ssh_host":"127.0.0.1","ssh_port":9,"ssh_user":"wolf-manager"}),&cookie,&csrf).await.status(),StatusCode::CREATED);
+    let created = process.request(Method::POST,"pcs",json!({"display_name":"Broker fixture","ssh_host":"127.0.0.1","ssh_port":9,"ssh_user":"wolf-manager"}),&cookie,&csrf).await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created: Value = created.json().await.unwrap();
+    let pc = PcId::new(created["pc_id"].as_str().unwrap()).unwrap();
     use rumqttc::v5::{AsyncClient, MqttOptions, mqttbytes::QoS};
     use wolf_core::{AppId, CatalogAttributes, CatalogManifest, Topics, steam_cover_url};
     let options = MqttOptions::new(
@@ -546,7 +558,6 @@ async fn live_broker_runtime_becomes_ready_and_drains_on_sigterm() {
     let (publisher, mut events) = AsyncClient::new(options, 32);
     let peer = tokio::spawn(async move { while events.poll().await.is_ok() {} });
     let topics = Topics::new(&process.topic, "homeassistant").unwrap();
-    let pc = PcId::new("broker-pc").unwrap();
     // Registration is reconciled by the runtime's five-second snapshot, without restart.
     tokio::time::sleep(Duration::from_secs(6)).await;
     let app = AppId::new("480").unwrap();
@@ -601,7 +612,7 @@ async fn live_broker_runtime_becomes_ready_and_drains_on_sigterm() {
         let response = process
             .request(
                 Method::GET,
-                "pcs/broker-pc/games",
+                &format!("pcs/{pc}/games"),
                 json!({}),
                 &cookie,
                 &csrf,
@@ -634,7 +645,7 @@ async fn live_broker_runtime_becomes_ready_and_drains_on_sigterm() {
             let body: Value = process
                 .request(
                     Method::GET,
-                    "pcs/broker-pc/operations",
+                    &format!("pcs/{pc}/operations"),
                     json!({}),
                     &cookie,
                     &csrf,
@@ -676,7 +687,7 @@ async fn live_broker_runtime_becomes_ready_and_drains_on_sigterm() {
     let body: Value = process
         .request(
             Method::GET,
-            "pcs/broker-pc/games",
+            &format!("pcs/{pc}/games"),
             json!({}),
             &cookie,
             &csrf,
@@ -689,7 +700,13 @@ async fn live_broker_runtime_becomes_ready_and_drains_on_sigterm() {
     assert_eq!(body["games"].as_array().unwrap().len(), 1);
     assert_eq!(
         process
-            .request(Method::DELETE, "pcs/broker-pc", json!({}), &cookie, &csrf)
+            .request(
+                Method::DELETE,
+                &format!("pcs/{pc}"),
+                json!({}),
+                &cookie,
+                &csrf
+            )
             .await
             .status(),
         StatusCode::NO_CONTENT

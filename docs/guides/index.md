@@ -1,6 +1,6 @@
 # Use HA Wolf Manager
 
-Choose one manager deployment, then install the host toolkit on each PC. The manager stores accounts, SSH identities, desired settings and operation history. The PC retains Wolf, Steam data and root-owned policy. Neither deployment requires Ansible.
+Choose one manager deployment, register each PC by its display name and SSH endpoint, then install its host toolkit using the generated setup values. Generate a manager SSH identity or import an existing unencrypted OpenSSH Ed25519 key; never send private keys to an assistant or support channel. The manager stores accounts, SSH identities, desired settings and operation history. The PC retains Wolf, Steam data and root-owned policy. Neither deployment requires Ansible.
 
 - [Standalone HTTPS service](standalone.md): Docker Compose, protected files and first login.
 - [Home Assistant add-on](home-assistant.md): Ingress, MQTT discovery and automation.

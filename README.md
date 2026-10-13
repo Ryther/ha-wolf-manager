@@ -36,9 +36,10 @@ by task. The same [guides are available on GitHub](docs/index.md). For a first s
 1. [Choose a deployment](docs/guides/index.md): the
    [Home Assistant add-on](docs/guides/home-assistant.md) requires Supervisor;
    [standalone Docker](docs/guides/standalone.md) uses HTTPS and its own account.
-2. [Prepare or adopt a Wolf PC](docs/guides/host-installation.md): preserve its
-   existing data, review a local installer preview, then explicitly apply and
-   activate the restricted toolkit.
+2. [Prepare or adopt a Wolf PC](docs/guides/host-installation.md): register its
+   display name and SSH endpoint, generate or import an Ed25519 identity, and
+   copy the generated host setup values. Preserve existing data, review a local
+   installer preview, then explicitly apply and activate the restricted toolkit.
 3. [Enroll and observe the PC](docs/guides/operations.md#register-and-observe-a-pc):
    compare its SSH fingerprint independently, test the connection and refresh
    actual service/catalog status before changing settings.

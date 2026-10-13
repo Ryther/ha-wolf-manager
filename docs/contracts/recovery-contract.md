@@ -11,6 +11,13 @@ be nil. This semantic validation also applies when the bundle checksum matches.
 An absent identity is allowed before first MQTT initialization; backup does not
 create one or otherwise initialize source state.
 
+SSH identity inspection does not create directories or keys. An interrupted
+initial key installation may leave an empty protected PC directory; backup
+accepts it only for a registered PC with no recorded client identity or host
+enrollment. Unknown or enrolled empty directories remain invalid. Private-key
+staging uses an anonymous inode, so interruption cannot leave a named partial
+key beside the published identity.
+
 Malformed source or bundle state is refused before creating a destination.
 Preview is read-only. Restore prepares a complete private directory and exchanges
 it with the target, retaining the prior target as a rollback directory. If an

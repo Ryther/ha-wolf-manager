@@ -239,27 +239,57 @@
   }
   function pcDialog(pc=null){
     const {dialog,close}=modal(pc?'Edit PC':'Add PC');const form=node('form',null,{class:'stack'});
-    const id=field('PC ID','text',pc?.pc_id||'',{required:'',pattern:String.raw`[a-z0-9][a-z0-9_\-]{0,63}`,disabled:!!pc});
-    const name=field('Display name','text',pc?.display_name||'',{required:'',maxlength:'256'});
+    const name=field('Display name','text',pc?.display_name||'',{required:'',maxlength:'128'});
     const host=field('SSH host','text',pc?.ssh_host||'',{required:''});
     const port=field('SSH port','number',pc?.ssh_port||22,{required:'',min:'1',max:'65535'});
     const user=field('SSH user','text',pc?.ssh_user||'wolf-manager',{required:''});
     const save=node('button','Save PC',{type:'submit',class:'primary'});
-    append(form,id.label,name.label,host.label,port.label,user.label,node('small','Endpoint changes require a new fingerprint enrollment.'),append(node('div',null,{class:'row'}),save,close));
+    append(form,name.label,host.label,port.label,user.label,node('small','Endpoint changes require a new fingerprint enrollment.'),append(node('div',null,{class:'row'}),save,close));
     if(pc)form.append(button('Archive PC',async()=>{if(!window.confirm('Archive this PC? Host data is preserved.')){return;}await api('pcs/'+encodeURIComponent(pc.pc_id),{method:'DELETE'});dialog.close();await dashboard();}));
     dialog.append(form);form.addEventListener('submit',async e=>{e.preventDefault();save.disabled=true;try{
       const endpoint={display_name:name.input.value,ssh_host:host.input.value,ssh_port:Number(port.input.value),ssh_user:user.input.value};
-      await api(pc?'pcs/'+encodeURIComponent(pc.pc_id):'pcs',{method:pc?'PATCH':'POST',body:pc?endpoint:{pc_id:id.input.value,...endpoint}});
-      dialog.close();selected=pc?.pc_id||id.input.value;await dashboard();notice('PC saved. Verify SSH enrollment before control.');
+      const saved=await api(pc?'pcs/'+encodeURIComponent(pc.pc_id):'pcs',{method:pc?'PATCH':'POST',body:endpoint});
+      dialog.close();selected=saved.pc_id;await dashboard();notice('PC saved. Verify SSH enrollment before control.');
     }catch(e){notice(e.message,true);}finally{save.disabled=false;}});
   }
   async function sshDialog(pc){
     const {dialog,close}=modal('SSH setup — '+pc.display_name),root='pcs/'+encodeURIComponent(pc.pc_id)+'/ssh/';
     append(dialog,close,node('p','Install this public key using the restricted host installer. Never grant an unrestricted shell or Docker access.'));
-    const key=await api(root+'public-key');dialog.append(node('pre',key.public_key));
+    const setup=append(node('details'),node('summary','Host setup values'),node('p','Copy these generated values into the host policy and catalog configuration. Do not choose or change the internal identity.'),node('pre',JSON.stringify({pc_id:pc.pc_id},null,2)));
+    dialog.append(setup);
+    const identity=node('section',null,{class:'stack'});dialog.append(identity);
+    let privateInput=null,identityConfigured=false,refreshTrust=()=>{};
+    dialog.addEventListener('close',()=>{if(privateInput)privateInput.value='';});
+    const showKey=key=>{identityConfigured=true;refreshTrust();if(privateInput){privateInput.value='';privateInput=null;}identity.replaceChildren(node('h3','Configured SSH key'),node('pre',key.public_key),node('p','The private key stays in protected manager storage. Replacing a configured identity is not supported here.'));};
+    const current=await api(root+'identity');
+    if(current.configured)showKey(current);
+    else {
+      const choices=node('div',null,{class:'row'});
+      const generate=button('Generate key',async()=>{importKey.disabled=true;try{showKey(await api(root+'public-key'));}finally{importKey.disabled=false;}});
+      const importKey=button('Import existing key',()=>{
+        const form=node('form',null,{class:'stack'});
+        const secret=field('Private key (OpenSSH)','textarea','',{required:'',maxlength:'16384',autocomplete:'off',spellcheck:'false',autocapitalize:'none'});
+        const publicKey=field('Public key (optional)','textarea','',{maxlength:'4096',autocomplete:'off',spellcheck:'false'});
+        privateInput=secret.input;
+        const submit=node('button','Import key',{type:'submit',class:'primary'});
+        append(form,node('p','Use an unencrypted OpenSSH Ed25519 private key. An optional public key must match. Import only a key you intend to entrust to this manager; the private key is included in its protected backups.'),secret.label,publicKey.label,submit);
+        form.addEventListener('submit',async event=>{
+          event.preventDefault();submit.disabled=true;generate.disabled=true;
+          const payload={private_key:secret.input.value};
+          if(publicKey.input.value.trim())payload.public_key=publicKey.input.value.trim();
+          secret.input.value='';
+          try {showKey(await api(root+'identity',{method:'POST',body:payload}));}
+          catch(e){notice(e.message,true);}
+          finally {delete payload.private_key;secret.input.value='';submit.disabled=false;generate.disabled=false;}
+        });
+        identity.replaceChildren(form);secret.input.focus();
+      });
+      append(choices,generate,importKey);identity.append(node('h3','Choose an SSH key'),node('p','Choose a key before trusting the PC fingerprint.'),choices);
+    }
     const evidence=node('div'),verified=check('I verified this fingerprint independently');let probe=null;
-    const enroll=button('Trust fingerprint',async()=>{if(!probe||!verified.input.checked){return;}await api(root+'enroll',{method:'POST',body:{probe_id:probe.probe_id,fingerprint:probe.fingerprint}});notice('Fingerprint enrolled. Run the connection test.');},{disabled:true});
-    verified.input.addEventListener('change',()=>enroll.disabled=!verified.input.checked||!probe);
+    const enroll=button('Trust fingerprint',async()=>{if(!identityConfigured||!probe||!verified.input.checked){return;}await api(root+'enroll',{method:'POST',body:{probe_id:probe.probe_id,fingerprint:probe.fingerprint}});notice('Fingerprint enrolled. Run the connection test.');},{disabled:true});
+    refreshTrust=()=>enroll.disabled=!identityConfigured||!verified.input.checked||!probe;
+    verified.input.addEventListener('change',refreshTrust);
     append(dialog,button('Probe host key',async()=>{probe=await api(root+'probe',{method:'POST'});verified.input.checked=false;enroll.disabled=true;evidence.replaceChildren(node('p',probe.algorithm),node('code',probe.fingerprint),node('small','Compare with the host console before trusting.'));}),evidence,verified.label,
       append(node('div',null,{class:'row'}),enroll,button('Test connection',()=>queue(root+'test',{})),close));
   }

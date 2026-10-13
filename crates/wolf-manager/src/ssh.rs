@@ -113,7 +113,7 @@ fn child_directory(parent: &File, name: &str) -> Result<File, SafeError> {
     .map_err(forbidden)?;
     private_directory(File::from(fd))
 }
-fn key_directory(data: &Path, pc: &PcId) -> Result<File, SafeError> {
+fn private_root(data: &Path) -> Result<File, SafeError> {
     if !data.is_absolute()
         || data
             .components()
@@ -152,13 +152,35 @@ fn key_directory(data: &Path, pc: &PcId) -> Result<File, SafeError> {
         )
         .map_err(forbidden)?,
     ))?;
-    child_directory(&child_directory(&root, "keys")?, pc.as_str())
+    Ok(root)
+}
+fn key_directory(data: &Path, pc: &PcId, create: bool) -> Result<Option<File>, SafeError> {
+    let mut directory = private_root(data)?;
+    for name in ["keys", pc.as_str()] {
+        if create {
+            directory = child_directory(&directory, name)?;
+        } else {
+            let fd = match rustix::fs::openat2(
+                &directory,
+                name,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+                Mode::empty(),
+                ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_MAGICLINKS,
+            ) {
+                Ok(fd) => fd,
+                Err(rustix::io::Errno::NOENT) => return Ok(None),
+                Err(e) => return Err(forbidden(e)),
+            };
+            directory = private_directory(File::from(fd))?;
+        }
+    }
+    Ok(Some(directory))
 }
 fn read_identity(directory: &File) -> Result<PrivateKey, SafeError> {
     let fd = rustix::fs::openat2(
         directory,
         "id_ed25519",
-        OFlags::RDONLY | OFlags::CLOEXEC,
+        OFlags::RDONLY | OFlags::NONBLOCK | OFlags::CLOEXEC,
         Mode::empty(),
         ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_MAGICLINKS,
     )
@@ -185,34 +207,105 @@ fn read_identity(directory: &File) -> Result<PrivateKey, SafeError> {
     }
     Ok(key)
 }
-/// Generate or validate the fixed protected identity; return public material only.
-pub fn ensure_identity(data: &Path, pc: &PcId) -> Result<String, SafeError> {
-    let directory = key_directory(data, pc)?;
-    match rustix::fs::openat2(
+/// Read public identity material without creating a private identity.
+pub fn identity_public_key(data: &Path, pc: &PcId) -> Result<Option<String>, SafeError> {
+    let Some(directory) = key_directory(data, pc, false)? else {
+        return Ok(None);
+    };
+    match rustix::fs::statat(
         &directory,
         "id_ed25519",
-        OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::CLOEXEC,
+        rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+    ) {
+        Err(rustix::io::Errno::NOENT) => Ok(None),
+        Err(e) => Err(forbidden(e)),
+        Ok(_) => Ok(Some(
+            read_identity(&directory)?
+                .public_key()
+                .to_openssh()
+                .map_err(internal)?,
+        )),
+    }
+}
+fn install_identity(directory: &File, key: &PrivateKey) -> Result<String, SafeError> {
+    let fd = rustix::fs::openat2(
+        directory,
+        ".",
+        OFlags::WRONLY | OFlags::TMPFILE | OFlags::CLOEXEC,
         Mode::from_raw_mode(0o600),
         ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_MAGICLINKS,
+    )
+    .map_err(forbidden)?;
+    let encoded = key
+        .to_openssh(russh::keys::ssh_key::LineEnding::LF)
+        .map_err(internal)?;
+    let mut file = File::from(fd);
+    file.write_all(encoded.as_bytes()).map_err(internal)?;
+    file.sync_all().map_err(internal)?;
+    match rustix::fs::linkat(
+        &file,
+        "",
+        directory,
+        "id_ed25519",
+        rustix::fs::AtFlags::EMPTY_PATH,
     ) {
-        Ok(fd) => {
-            let key = PrivateKey::random(&mut russh::keys::key::safe_rng(), Algorithm::Ed25519)
-                .map_err(internal)?;
-            let encoded = key
-                .to_openssh(russh::keys::ssh_key::LineEnding::LF)
-                .map_err(internal)?;
-            let mut file = File::from(fd);
-            file.write_all(encoded.as_bytes()).map_err(internal)?;
-            file.sync_all().map_err(internal)?;
-            directory.sync_all().map_err(internal)?;
-        }
+        Ok(()) => directory.sync_all().map_err(internal)?,
         Err(rustix::io::Errno::EXIST) => {}
         Err(e) => return Err(forbidden(e)),
     }
-    read_identity(&directory)?
+    read_identity(directory)?
         .public_key()
         .to_openssh()
         .map_err(internal)
+}
+/// Generate or validate the fixed protected identity; return public material only.
+pub fn ensure_identity(data: &Path, pc: &PcId) -> Result<String, SafeError> {
+    if let Some(public) = identity_public_key(data, pc)? {
+        return Ok(public);
+    }
+    let key = PrivateKey::random(&mut russh::keys::key::safe_rng(), Algorithm::Ed25519)
+        .map_err(internal)?;
+    install_identity(
+        &key_directory(data, pc, true)?.ok_or_else(SafeError::validation)?,
+        &key,
+    )
+}
+/// Import an initial unencrypted Ed25519 identity without replacing existing bytes.
+pub fn import_identity(
+    data: &Path,
+    pc: &PcId,
+    private: &str,
+    public: Option<&str>,
+) -> Result<String, SafeError> {
+    if private.is_empty() || private.len() > 16 * 1024 {
+        return Err(SafeError::validation());
+    }
+    let key = PrivateKey::from_openssh(private).map_err(|_| SafeError::validation())?;
+    if key.algorithm() != Algorithm::Ed25519 || key.is_encrypted() {
+        return Err(SafeError::validation());
+    }
+    if let Some(public) = public {
+        if public.len() > 4096 {
+            return Err(SafeError::validation());
+        }
+        let supplied = PublicKey::from_openssh(public).map_err(|_| SafeError::validation())?;
+        if supplied.key_data() != key.public_key().key_data() {
+            return Err(SafeError::validation());
+        }
+    }
+    let expected = key.public_key().to_openssh().map_err(internal)?;
+    let actual = match identity_public_key(data, pc)? {
+        Some(existing) => existing,
+        None => install_identity(
+            &key_directory(data, pc, true)?.ok_or_else(SafeError::validation)?,
+            &key,
+        )?,
+    };
+    let existing = PublicKey::from_openssh(&actual).map_err(forbidden)?;
+    if existing.key_data() != key.public_key().key_data() {
+        return Err(SafeError::new("forbidden"));
+    }
+    Ok(expected)
 }
 struct Verifier {
     expected: Option<PublicKey>,
@@ -283,7 +376,8 @@ pub struct ReadyClient {
 /// Verify the enrolled key before authenticating with the protected identity.
 pub async fn connect(endpoint: &Endpoint, data: &Path) -> Result<ReadyClient, SafeError> {
     let expected = endpoint.enrolled()?;
-    let directory = key_directory(data, &endpoint.pc_id)?;
+    let directory =
+        key_directory(data, &endpoint.pc_id, false)?.ok_or_else(|| SafeError::new("forbidden"))?;
     let key = Arc::new(read_identity(&directory)?);
     let endpoint = endpoint.clone();
     tokio::time::timeout(CONNECT_TIMEOUT, async move {

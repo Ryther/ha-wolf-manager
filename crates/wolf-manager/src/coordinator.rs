@@ -15,6 +15,30 @@ pub(crate) struct PendingProbe {
     pub probe: Probe,
     pub expires_at: i64,
 }
+fn recorded_identity(
+    s: &crate::store::Store,
+    data: &std::path::Path,
+    pc: &PcId,
+) -> Result<Option<String>, SafeError> {
+    ensure_pc(&s.conn, pc)?;
+    let (expected, host_enrolled): (Option<String>, bool) = s.conn.query_row(
+        "SELECT enrolled_public_key,host_key_algorithm IS NOT NULL OR host_key_public IS NOT NULL OR host_key_fingerprint IS NOT NULL FROM pcs WHERE pc_id=?1",
+        [pc.as_str()], |row| Ok((row.get(0)?, row.get(1)?))).map_err(internal)?;
+    let actual = ssh::identity_public_key(data, pc)?;
+    if actual.is_none() && (expected.is_some() || host_enrolled) {
+        return Err(SafeError::new("forbidden"));
+    }
+    if let (Some(expected), Some(actual)) = (expected, actual.as_deref()) {
+        let expected = russh::keys::PublicKey::from_openssh(&expected)
+            .map_err(|_| SafeError::new("forbidden"))?;
+        let actual = russh::keys::PublicKey::from_openssh(actual)
+            .map_err(|_| SafeError::new("forbidden"))?;
+        if expected.key_data() != actual.key_data() {
+            return Err(SafeError::new("forbidden"));
+        }
+    }
+    Ok(actual)
+}
 impl AppState {
     pub async fn endpoint(&self, pc: &PcId) -> Result<Endpoint, SafeError> {
         let pc = pc.clone();
@@ -40,7 +64,10 @@ impl AppState {
         let pc = pc.clone();
         self.blocking(move |s| {
             s.root.verify()?;
-            let key = ssh::ensure_identity(&data, &pc)?;
+            let key = match recorded_identity(s, &data, &pc)? {
+                Some(public) => public,
+                None => ssh::ensure_identity(&data, &pc)?,
+            };
             s.conn
                 .execute(
                     "UPDATE pcs SET enrolled_public_key=?1 WHERE pc_id=?2",
@@ -50,6 +77,43 @@ impl AppState {
             Ok(key)
         })
         .await
+    }
+    pub async fn identity_public_key(&self, pc: &PcId) -> Result<Option<String>, SafeError> {
+        let data = self.data.clone();
+        let pc = pc.clone();
+        self.blocking(move |s| {
+            s.root.verify()?;
+            ensure_pc(&s.conn, &pc)?;
+            recorded_identity(s, &data, &pc)
+        })
+        .await
+    }
+    pub async fn import_identity(
+        &self,
+        pc: &PcId,
+        private: String,
+        public: Option<String>,
+    ) -> Result<String, SafeError> {
+        let data = self.data.clone();
+        let pc = pc.clone();
+        let mut private = private.into_bytes();
+        self.blocking(move |s| {
+            let result = (|| {
+                s.root.verify()?;
+                ensure_pc(&s.conn, &pc)?;
+                let active: i64 = s.conn.query_row("SELECT count(*) FROM operations WHERE pc_id=?1 AND state IN ('queued','running','unknown_interrupted')", [pc.as_str()], |r| r.get(0)).map_err(internal)?;
+                if active != 0 { return Err(SafeError::new("operation_in_progress")); }
+                let enrolled: bool = s.conn.query_row("SELECT host_key_public IS NOT NULL FROM pcs WHERE pc_id=?1", [pc.as_str()], |r| r.get(0)).map_err(internal)?;
+                if enrolled { return Err(SafeError::new("forbidden")); }
+                recorded_identity(s, &data, &pc)?;
+                let key = ssh::import_identity(&data, &pc, std::str::from_utf8(&private).map_err(|_| SafeError::validation())?, public.as_deref())?;
+                s.conn.execute("UPDATE pcs SET enrolled_public_key=?1 WHERE pc_id=?2", params![key, pc.as_str()]).map_err(internal)?;
+                Ok(key)
+            })();
+            // Erase the request buffer once parsing/storage finishes; never expose it in errors.
+            private.fill(0);
+            result
+        }).await
     }
     pub async fn probe_host(&self, pc: &PcId) -> Result<serde_json::Value, SafeError> {
         let endpoint = self.endpoint(pc).await?;
@@ -93,7 +157,8 @@ impl AppState {
             return Err(SafeError::new("host_key_mismatch"));
         }
         let pc = pc.clone();
-        self.blocking(move|s|{s.ensure_no_mutation(&pc)?;if pending.expires_at<=now(){return Err(SafeError::new("host_key_mismatch"));}let changed=s.conn.execute("UPDATE pcs SET host_key_algorithm=?1,host_key_public=?2,host_key_fingerprint=?3,updated_at_ms=?4 WHERE pc_id=?5 AND ssh_host=?6 AND ssh_port=?7 AND ssh_user=?8 AND archived_at_ms IS NULL",params![pending.probe.algorithm,pending.probe.public_key,pending.probe.fingerprint,now(),pc.as_str(),pending.endpoint.host,pending.endpoint.port,pending.endpoint.user]).map_err(internal)?;if changed!=1{return Err(SafeError::new("host_key_mismatch"));}Ok(())}).await
+        let data = self.data.clone();
+        self.blocking(move|s|{s.root.verify()?;s.ensure_no_mutation(&pc)?;recorded_identity(s, &data, &pc)?.ok_or_else(SafeError::validation)?;if pending.expires_at<=now(){return Err(SafeError::new("host_key_mismatch"));}let changed=s.conn.execute("UPDATE pcs SET host_key_algorithm=?1,host_key_public=?2,host_key_fingerprint=?3,updated_at_ms=?4 WHERE pc_id=?5 AND ssh_host=?6 AND ssh_port=?7 AND ssh_user=?8 AND archived_at_ms IS NULL",params![pending.probe.algorithm,pending.probe.public_key,pending.probe.fingerprint,now(),pc.as_str(),pending.endpoint.host,pending.endpoint.port,pending.endpoint.user]).map_err(internal)?;if changed!=1{return Err(SafeError::new("host_key_mismatch"));}Ok(())}).await
     }
     pub async fn submit(
         &self,
@@ -450,5 +515,330 @@ mod enrollment_tests {
                 .host_key_fingerprint
                 .is_none()
         );
+    }
+    #[tokio::test]
+    async fn identity_import_refuses_enrollment_and_unresolved_operations_without_writes() {
+        let t = tempfile::tempdir().unwrap();
+        let data = t.path().join("data");
+        let mut store = crate::store::Store::open(&data, 0).unwrap();
+        let pc = PcId::new("import-pc").unwrap();
+        store
+            .add_pc(
+                crate::domain::PcInput {
+                    pc_id: pc.clone(),
+                    display_name: "PC".into(),
+                    ssh_host: "127.0.0.1".into(),
+                    ssh_port: 22,
+                    ssh_user: "wolf-manager".into(),
+                },
+                0,
+            )
+            .unwrap();
+        let state = AppState::new(
+            store,
+            data.clone(),
+            crate::api::Deployment::Ingress,
+            crate::auth::TransportPolicy::Ingress,
+        );
+        let key = russh::keys::PrivateKey::random(
+            &mut russh::keys::key::safe_rng(),
+            russh::keys::Algorithm::Ed25519,
+        )
+        .unwrap();
+        let private = key
+            .to_openssh(russh::keys::ssh_key::LineEnding::LF)
+            .unwrap()
+            .to_string();
+        let public = key.public_key().to_openssh().unwrap();
+        assert_eq!(state.identity_public_key(&pc).await.unwrap(), None);
+        assert_eq!(
+            state
+                .import_identity(&pc, private.clone(), Some(public.clone()))
+                .await
+                .unwrap(),
+            public
+        );
+        let path = data.join("keys/import-pc/id_ed25519");
+        let original = std::fs::read(&path).unwrap();
+        let id = pc.clone();
+        state
+            .blocking(move |s| {
+                s.conn
+                    .execute(
+                        "UPDATE pcs SET host_key_public='enrolled' WHERE pc_id=?1",
+                        [id.as_str()],
+                    )
+                    .map_err(internal)?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        assert!(
+            state
+                .import_identity(&pc, private.clone(), None)
+                .await
+                .is_err()
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        let id = pc.clone();
+        state
+            .blocking(move |s| {
+                s.conn
+                    .execute(
+                        "UPDATE pcs SET host_key_public=NULL WHERE pc_id=?1",
+                        [id.as_str()],
+                    )
+                    .map_err(internal)?;
+                let request = RpcRequest {
+                    version: 1,
+                    request_id: Uuid::new_v4(),
+                    pc_id: id.clone(),
+                    operation: RpcOperation::Preflight(EmptyPayload {}),
+                };
+                let operation =
+                    s.enqueue_operation(&id, OperationKind::Preflight, None, &[request], 1)?;
+                s.conn
+                    .execute(
+                        "UPDATE operations SET state='unknown_interrupted' WHERE operation_id=?1",
+                        [operation.to_string()],
+                    )
+                    .map_err(internal)?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        assert!(state.import_identity(&pc, private, None).await.is_err());
+        assert_eq!(std::fs::read(path).unwrap(), original);
+    }
+    #[tokio::test]
+    async fn missing_recorded_identity_never_generates_a_replacement() {
+        let t = tempfile::tempdir().unwrap();
+        let data = t.path().join("data");
+        let mut store = crate::store::Store::open(&data, 0).unwrap();
+        let pc = PcId::new("preserve-key").unwrap();
+        store
+            .add_pc(
+                crate::domain::PcInput {
+                    pc_id: pc.clone(),
+                    display_name: "PC".into(),
+                    ssh_host: "127.0.0.1".into(),
+                    ssh_port: 22,
+                    ssh_user: "wolf-manager".into(),
+                },
+                0,
+            )
+            .unwrap();
+        let state = AppState::new(
+            store,
+            data.clone(),
+            crate::api::Deployment::Ingress,
+            crate::auth::TransportPolicy::Ingress,
+        );
+        let public = state.public_key(&pc).await.unwrap();
+        let path = data.join("keys/preserve-key/id_ed25519");
+        let original = std::fs::read(&path).unwrap();
+        let id = pc.clone();
+        let commented = format!("{public} optional existing comment");
+        state
+            .blocking(move |s| {
+                s.conn
+                    .execute(
+                        "UPDATE pcs SET enrolled_public_key=?1 WHERE pc_id=?2",
+                        params![commented, id.as_str()],
+                    )
+                    .map_err(internal)?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            state.identity_public_key(&pc).await.unwrap(),
+            Some(public.clone())
+        );
+        assert_eq!(state.public_key(&pc).await.unwrap(), public);
+        let replacement = russh::keys::PrivateKey::random(
+            &mut russh::keys::key::safe_rng(),
+            russh::keys::Algorithm::Ed25519,
+        )
+        .unwrap()
+        .to_openssh(russh::keys::ssh_key::LineEnding::LF)
+        .unwrap();
+        std::fs::write(&path, replacement.as_bytes()).unwrap();
+        assert!(state.identity_public_key(&pc).await.is_err());
+        assert!(state.public_key(&pc).await.is_err());
+        assert!(
+            state
+                .import_identity(&pc, replacement.to_string(), None)
+                .await
+                .is_err()
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), replacement.as_bytes());
+        std::fs::write(&path, &original).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert!(state.identity_public_key(&pc).await.is_err());
+        assert!(state.public_key(&pc).await.is_err());
+        assert!(
+            state
+                .import_identity(&pc, String::from_utf8(original).unwrap(), None)
+                .await
+                .is_err()
+        );
+        assert!(!path.exists());
+        let id = pc.clone();
+        let retained: String = state
+            .blocking(move |s| {
+                s.conn
+                    .query_row(
+                        "SELECT enrolled_public_key FROM pcs WHERE pc_id=?1",
+                        [id.as_str()],
+                        |r| r.get(0),
+                    )
+                    .map_err(internal)
+            })
+            .await
+            .unwrap();
+        assert_eq!(retained, public);
+        let id = pc.clone();
+        state.blocking(move |s| { s.conn.execute("UPDATE pcs SET enrolled_public_key=NULL,host_key_public='recorded-host' WHERE pc_id=?1", [id.as_str()]).map_err(internal)?; Ok(()) }).await.unwrap();
+        assert!(state.identity_public_key(&pc).await.is_err());
+        assert!(state.public_key(&pc).await.is_err());
+        assert!(!path.exists());
+    }
+    #[tokio::test]
+    async fn host_enrollment_requires_explicit_identity_choice_without_an_onboarding_dead_end() {
+        for imported in [false, true] {
+            let t = tempfile::tempdir().unwrap();
+            let data = t.path().join("data");
+            let mut store = crate::store::Store::open(&data, 0).unwrap();
+            let pc = PcId::new("onboarding-pc").unwrap();
+            store
+                .add_pc(
+                    crate::domain::PcInput {
+                        pc_id: pc.clone(),
+                        display_name: "PC".into(),
+                        ssh_host: "127.0.0.1".into(),
+                        ssh_port: 22,
+                        ssh_user: "wolf-manager".into(),
+                    },
+                    0,
+                )
+                .unwrap();
+            let state = AppState::new(
+                store,
+                data.clone(),
+                crate::api::Deployment::Ingress,
+                crate::auth::TransportPolicy::Ingress,
+            );
+            let endpoint = state.endpoint(&pc).await.unwrap();
+            let host = russh::keys::PrivateKey::random(
+                &mut russh::keys::key::safe_rng(),
+                russh::keys::Algorithm::Ed25519,
+            )
+            .unwrap();
+            let probe = Probe {
+                algorithm: host.algorithm().to_string(),
+                public_key: host.public_key().to_openssh().unwrap(),
+                fingerprint: host
+                    .public_key()
+                    .fingerprint(russh::keys::HashAlg::Sha256)
+                    .to_string(),
+            };
+            let initial = Uuid::new_v4();
+            state.probes.lock().unwrap().insert(
+                initial,
+                PendingProbe {
+                    endpoint: endpoint.clone(),
+                    probe: probe.clone(),
+                    expires_at: now() + 60000,
+                },
+            );
+            assert!(
+                state
+                    .enroll(&pc, initial, probe.fingerprint.clone())
+                    .await
+                    .is_err()
+            );
+            let unconfigured = state.endpoint(&pc).await.unwrap();
+            assert!(unconfigured.host_key_algorithm.is_none());
+            assert!(unconfigured.host_key_public.is_none());
+            assert!(unconfigured.host_key_fingerprint.is_none());
+            assert!(!data.join("keys").exists());
+            if imported {
+                let key = russh::keys::PrivateKey::random(
+                    &mut russh::keys::key::safe_rng(),
+                    russh::keys::Algorithm::Ed25519,
+                )
+                .unwrap();
+                state
+                    .import_identity(
+                        &pc,
+                        key.to_openssh(russh::keys::ssh_key::LineEnding::LF)
+                            .unwrap()
+                            .to_string(),
+                        None,
+                    )
+                    .await
+                    .unwrap();
+            } else {
+                state.public_key(&pc).await.unwrap();
+            }
+            let original = std::fs::read(data.join("keys/onboarding-pc/id_ed25519")).unwrap();
+            let ready = Uuid::new_v4();
+            state.probes.lock().unwrap().insert(
+                ready,
+                PendingProbe {
+                    endpoint,
+                    probe: probe.clone(),
+                    expires_at: now() + 60000,
+                },
+            );
+            state
+                .enroll(&pc, ready, probe.fingerprint.clone())
+                .await
+                .unwrap();
+            assert_eq!(
+                state.endpoint(&pc).await.unwrap().host_key_fingerprint,
+                Some(probe.fingerprint)
+            );
+            assert_eq!(
+                std::fs::read(data.join("keys/onboarding-pc/id_ed25519")).unwrap(),
+                original
+            );
+            let host = russh::keys::PrivateKey::random(
+                &mut russh::keys::key::safe_rng(),
+                russh::keys::Algorithm::Ed25519,
+            )
+            .unwrap();
+            let rotated = Probe {
+                algorithm: host.algorithm().to_string(),
+                public_key: host.public_key().to_openssh().unwrap(),
+                fingerprint: host
+                    .public_key()
+                    .fingerprint(russh::keys::HashAlg::Sha256)
+                    .to_string(),
+            };
+            let rotation = Uuid::new_v4();
+            let endpoint = state.endpoint(&pc).await.unwrap();
+            state.probes.lock().unwrap().insert(
+                rotation,
+                PendingProbe {
+                    endpoint,
+                    probe: rotated.clone(),
+                    expires_at: now() + 60000,
+                },
+            );
+            state
+                .enroll(&pc, rotation, rotated.fingerprint.clone())
+                .await
+                .unwrap();
+            assert_eq!(
+                state.endpoint(&pc).await.unwrap().host_key_fingerprint,
+                Some(rotated.fingerprint)
+            );
+            assert_eq!(
+                std::fs::read(data.join("keys/onboarding-pc/id_ed25519")).unwrap(),
+                original
+            );
+        }
     }
 }

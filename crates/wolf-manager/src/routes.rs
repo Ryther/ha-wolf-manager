@@ -29,7 +29,7 @@ struct GameInput {
 }
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-struct UpdatePc {
+struct PcEndpointInput {
     display_name: String,
     ssh_host: String,
     ssh_port: u16,
@@ -161,9 +161,16 @@ async fn global_route(
         )));
     }
     if path == "pcs" && post {
-        let p: PcInput = json_body(headers, bytes)?;
-        let id = p.pc_id.clone();
-        state.blocking(move |s| s.add_pc(p, now())).await?;
+        let endpoint: PcEndpointInput = json_body(headers, bytes)?;
+        let id = PcId::new(format!("pc-{}", uuid::Uuid::new_v4()))?;
+        let input = PcInput {
+            pc_id: id.clone(),
+            display_name: endpoint.display_name,
+            ssh_host: endpoint.ssh_host,
+            ssh_port: endpoint.ssh_port,
+            ssh_user: endpoint.ssh_user,
+        };
+        state.blocking(move |s| s.add_pc(input, now())).await?;
         let pc = state
             .blocking(move |s| {
                 s.pcs()?
@@ -271,7 +278,7 @@ async fn pc_identity(
         return Ok(StatusCode::NO_CONTENT.into_response());
     }
     if *method == Method::PATCH {
-        let p: UpdatePc = json_body(headers, bytes)?;
+        let p: PcEndpointInput = json_body(headers, bytes)?;
         let id = pc.clone();
         state
             .blocking(move |s| {
@@ -323,6 +330,23 @@ async fn ssh_route(
     let get = *method == Method::GET;
     let post = *method == Method::POST;
     match leaf {
+        "identity" if get => {
+            let key = state.identity_public_key(&pc).await?;
+            return Ok(value(json!({"configured":key.is_some(),"public_key":key})));
+        }
+        "identity" if post => {
+            #[derive(serde::Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct ImportIdentity {
+                private_key: String,
+                public_key: Option<String>,
+            }
+            let p: ImportIdentity = json_body(headers, bytes)?;
+            let key = state
+                .import_identity(&pc, p.private_key, p.public_key)
+                .await?;
+            return Ok(value(json!({"configured":true,"public_key":key})));
+        }
         "public-key" if get => {
             return Ok(value(json!({"public_key":state.public_key(&pc).await?})));
         }

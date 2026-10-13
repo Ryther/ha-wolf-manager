@@ -28,7 +28,7 @@ async function fixture(page,mode='ingress',initialized=true){
    if(endpoint==='auth/csrf')return reply({csrf_token:'bound-csrf',expires_at:999999999});
    if(endpoint==='auth/logout'||endpoint==='auth/password'){authenticated=false;return route.fulfill({status:204});}
    if(endpoint==='pcs'&&method==='GET')return reply({pcs});
-   if(endpoint==='pcs'&&method==='POST'){pcs.push({...body,trust_state:'unenrolled'});return reply(pcs.at(-1),201);}
+   if(endpoint==='pcs'&&method==='POST'){pcs.push({...body,pc_id:'pc-server-assigned',trust_state:'unenrolled'});return reply(pcs.at(-1),201);}
    if(/^pcs\/[^/]+$/.test(endpoint))return method==='DELETE'?route.fulfill({status:204}):reply({...pcs[0],...body});
    if(endpoint.endsWith('/status'))return reply({status:{systemd_state:'active',container_state:'running',restart_count:0,exit_code:null,staged_revision:rev,running_revision:rev,recovery_pending:false},capabilities:{version:1,pc_id:endpoint.split('/')[1],ready:true,proton_cachyos:false,reasons:[]},availability:'online',observed_at:1});
    if(endpoint.endsWith('/settings')&&method==='GET')return reply({settings:{debug:{test_ball:false},parameters:{fsr4:{label:'FSR4',launch_options:'PROTON_FSR4_UPGRADE=1 %command%',description:'FSR4'}},games:{'570':{direct_launch:false,proton_cachyos:false,parameters:[]}}},desired_revision:desired,staged_revision:rev,running_revision:rev});
@@ -36,6 +36,7 @@ async function fixture(page,mode='ingress',initialized=true){
    if(endpoint.endsWith('/games'))return reply({games:[{version:1,pc_id:endpoint.split('/')[1],app_id:'570',name:endpoint.includes('/lounge/')?'Lounge game':'Dota 2',cover_url:'https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/570/library_600x900.jpg',library_id:'main',catalog_generation:2,observed_at_ms:1}],catalog_generation:2,observed_at:1,availability:endpoint.includes('/lounge/')?'offline':'online'});
    if(endpoint==='parameters')return reply({parameters:{fsr4:{label:'FSR4',launch_options:'PROTON_FSR4_UPGRADE=1 %command%',description:'FSR4'}}});
    if(endpoint.startsWith('parameters/')||endpoint==='settings/debug')return reply({});
+   if(endpoint.endsWith('/ssh/identity'))return reply(method==='GET'?{configured:true,public_key:'ssh-ed25519 AAAATEST fixture-only'}:{public_key:'ssh-ed25519 AAAAIMPORTED fixture-only'});
    if(endpoint.endsWith('/ssh/public-key'))return reply({public_key:'ssh-ed25519 AAAATEST fixture-only'});
    if(endpoint.endsWith('/ssh/probe'))return reply({probe_id:'fixture-probe',algorithm:'ssh-ed25519',fingerprint:'SHA256:fixture',expires_at:999999999});
    if(endpoint.endsWith('/ssh/enroll'))return reply({trust_state:'enrolled'});
@@ -78,8 +79,8 @@ test('standalone login uses single-use challenge and forgets password, logout re
 });
 test('bootstrap bearer token stays in memory and new PC onboarding uses closed endpoint DTO',async({page})=>{
  const calls=await fixture(page,'standalone',false);await page.getByLabel('Bootstrap token').fill('fixture-bootstrap-only');await page.getByLabel('Password',{exact:true}).fill('fixture-password-only');await page.getByRole('button',{name:'Create administrator'}).click();await expect(page.getByRole('button',{name:'Add PC'})).toBeVisible();
- expect(calls.find(c=>c.endpoint==='bootstrap').headers.authorization).toBe('Bearer fixture-bootstrap-only');await page.getByRole('button',{name:'Add PC'}).click();await page.getByLabel('PC ID').fill('study');await page.getByLabel('Display name').fill('Study');await page.getByLabel('SSH host').fill('192.0.2.3');await page.getByRole('button',{name:'Save PC',exact:true}).click();
- expect(calls.find(c=>c.endpoint==='pcs'&&c.method==='POST').body).toEqual({pc_id:'study',display_name:'Study',ssh_host:'192.0.2.3',ssh_port:22,ssh_user:'wolf-manager'});
+ expect(calls.find(c=>c.endpoint==='bootstrap').headers.authorization).toBe('Bearer fixture-bootstrap-only');await page.getByRole('button',{name:'Add PC'}).click();await page.getByLabel('Display name').fill('Study');await page.getByLabel('SSH host').fill('192.0.2.3');await page.getByRole('button',{name:'Save PC',exact:true}).click();
+ expect(calls.find(c=>c.endpoint==='pcs'&&c.method==='POST').body).toEqual({display_name:'Study',ssh_host:'192.0.2.3',ssh_port:22,ssh_user:'wolf-manager'});
 });
 test('uncertain operation reconciliation remains uncertain and log failure is recoverable',async({page})=>{
  const calls=await fixture(page);await page.getByText('Operation history',{exact:true}).click();await page.getByRole('button',{name:'Reconcile operation'}).click();await expect(page.getByText('Resolution: unknown_interrupted')).toBeVisible();
@@ -93,22 +94,22 @@ test('expired CSRF renews protection without automatically replaying a mutation'
  await page.getByRole('button',{name:'Stage settings',exact:true}).click();await expect(page.getByRole('alert')).toBeVisible();
  await expect.poll(()=>calls.filter(c=>c.endpoint==='auth/csrf').length).toBe(2);expect(refused).toBe(1);
 });
-test('SSH public-key failure keeps an accessible escape from the setup dialog',async({page})=>{
- await fixture(page);await page.route('**/api/v1/pcs/desk/ssh/public-key',route=>route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:{code:'host_unavailable',message:'Key unavailable'}})}));
+test('SSH identity lookup failure keeps an accessible escape from the setup dialog',async({page})=>{
+ await fixture(page);await page.route('**/api/v1/pcs/desk/ssh/identity',route=>route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:{code:'host_unavailable',message:'Key unavailable'}})}));
  await page.getByRole('button',{name:'SSH setup'}).click();await expect(page.getByRole('dialog').getByRole('alert')).toContainText('Key unavailable');await page.getByRole('button',{name:'Cancel'}).click();await expect(page.getByRole('dialog')).toHaveCount(0);
 });
 test('parameter editor accepts shared-contract uppercase and dot identifiers',async({page})=>{
  const calls=await fixture(page);await page.getByRole('button',{name:'Add parameter'}).click();await page.getByLabel('Parameter ID').fill('Compatibility.Layer');await page.getByLabel('Label',{exact:true}).fill('Compatibility');await page.getByLabel('Launch options').fill('FOO=1 %command%');await page.getByRole('button',{name:'Save parameter'}).click();
  await expect.poll(()=>calls.find(c=>c.endpoint==='parameters/Compatibility.Layer')?.body).toEqual({label:'Compatibility',launch_options:'FOO=1 %command%',description:''});
 });
-test('invalid parameter and PC identifiers are blocked before any submitted request',async({page})=>{
+test('invalid parameter identifiers are blocked before any submitted request',async({page})=>{
  const calls=await fixture(page);await page.getByRole('button',{name:'Add parameter'}).click();await page.getByLabel('Parameter ID').fill('bad/../id');await page.getByLabel('Label',{exact:true}).fill('Bad');await page.getByLabel('Launch options').fill('%command%');await page.getByRole('button',{name:'Save parameter'}).click();
  expect(await page.getByLabel('Parameter ID').evaluate(n=>n.checkValidity())).toBe(false);expect(calls.some(c=>c.endpoint.startsWith('parameters/')&&c.method==='PUT')).toBe(false);
 });
 test('mobile dashboard preserves keyboard access without horizontal overflow',async({page})=>{
  await page.setViewportSize({width:375,height:812});await fixture(page);await expect(page.getByRole('heading',{name:'Dota 2'})).toBeVisible();
  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
- await page.getByRole('button',{name:'Add PC'}).focus();await page.keyboard.press('Enter');await expect(page.getByLabel('PC ID')).toBeFocused();await page.keyboard.press('Escape');await expect(page.getByRole('dialog')).toHaveCount(0);
+ await page.getByRole('button',{name:'Add PC'}).focus();await page.keyboard.press('Enter');await expect(page.getByLabel('Display name')).toBeFocused();await page.keyboard.press('Escape');await expect(page.getByRole('dialog')).toHaveCount(0);
  await page.screenshot({path:'_tmp/ui-evidence/dashboard-mobile.png',fullPage:true});
  await page.setViewportSize({width:1440,height:1000});await page.screenshot({path:'_tmp/ui-evidence/dashboard-desktop.png',fullPage:true});
 });
@@ -149,7 +150,7 @@ test('compact library expands settings by keyboard and preserves parameter remov
  await expect(page.getByRole('checkbox',{name:'Direct launch'})).not.toBeVisible();
 });
 test('PC edit retains immutable identity and archive requires confirmation',async({page})=>{
- const calls=await fixture(page);await page.getByRole('button',{name:'Edit PC'}).click();await expect(page.getByLabel('PC ID')).toBeDisabled();
+ const calls=await fixture(page);await page.getByRole('button',{name:'Edit PC'}).click();await expect(page.getByLabel('PC ID')).toHaveCount(0);
  await page.getByLabel('Display name').fill('Renamed desktop');await page.getByLabel('SSH host').fill('192.0.2.42');await page.getByRole('button',{name:'Save PC',exact:true}).click();
  expect(calls.find(c=>c.endpoint==='pcs/desk'&&c.method==='PATCH').body).toEqual({display_name:'Renamed desktop',ssh_host:'192.0.2.42',ssh_port:22,ssh_user:'wolf-manager'});
  await page.getByRole('button',{name:'Edit PC'}).click();page.once('dialog',dialog=>dialog.dismiss());await page.getByRole('button',{name:'Archive PC'}).click();expect(calls.some(c=>c.method==='DELETE')).toBe(false);
@@ -175,14 +176,14 @@ test('operation pagination is explicit and exposes empty history without replay'
  const calls=await fixture(page);await page.route('**/api/v1/pcs/desk/operations?limit=20',route=>route.fulfill({contentType:'application/json',body:JSON.stringify({operations:[{operation_id:'test-complete',kind:'start',state:'completed',submitted_at:1,sanitized_result:{ok:true}}],next_cursor:'older cursor'})}));await page.route('**/api/v1/pcs/desk/operations?limit=20&cursor=older%20cursor',route=>route.fulfill({contentType:'application/json',body:JSON.stringify({operations:[],next_cursor:null})}));await page.getByRole('button',{name:'Refresh',exact:true}).click();await page.getByText('Operation history',{exact:true}).click();await expect(page.getByText('start · completed')).toBeVisible();await page.getByRole('button',{name:'Next operations'}).click();await expect(page.getByText('No operations yet.')).toBeVisible();expect(calls.some(c=>c.endpoint.includes('/service/'))).toBe(false);
 });
 test('empty host list gives an actionable onboarding screen and unavailable history is disclosed',async({page})=>{
- await fixture(page);await page.route('**/api/v1/pcs',route=>route.fulfill({contentType:'application/json',body:JSON.stringify({pcs:[]})}));await page.reload();await expect(page.getByText('Add a PC to get started.')).toBeVisible();await page.getByRole('button',{name:'Add PC'}).click();await expect(page.getByLabel('PC ID')).toBeFocused();await page.keyboard.press('Escape');
+ await fixture(page);await page.route('**/api/v1/pcs',route=>route.fulfill({contentType:'application/json',body:JSON.stringify({pcs:[]})}));await page.reload();await expect(page.getByText('Add a PC to get started.')).toBeVisible();await page.getByRole('button',{name:'Add PC'}).click();await expect(page.getByLabel('Display name')).toBeFocused();await page.keyboard.press('Escape');
 });
 test('reduced motion and narrow viewport keep operational and dialog controls reachable',async({page})=>{
  await page.emulateMedia({reducedMotion:'reduce'});await page.setViewportSize({width:320,height:640});await fixture(page);expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);await page.getByRole('button',{name:'SSH setup'}).click();await expect(page.getByRole('dialog')).toBeVisible();expect(await page.getByRole('dialog').evaluate(n=>n.scrollWidth<=n.clientWidth)).toBe(true);await page.keyboard.press('Escape');await expect(page.getByRole('button',{name:'SSH setup'})).toBeFocused();
 });
 test('rejected settings and onboarding mutations surface errors and keep drafts editable',async({page})=>{
  await fixture(page);await page.getByText('Game settings',{exact:true}).click();await page.route('**/api/v1/pcs/desk/games/570/settings',route=>route.fulfill({status:409,contentType:'application/json',body:JSON.stringify({error:{code:'stale_revision',message:'Refresh settings before saving'}})}));await page.getByRole('button',{name:'Save game settings'}).click();await expect(page.getByRole('alert')).toContainText('Refresh settings before saving');await expect(page.getByRole('button',{name:'Save game settings'})).toBeEnabled();
- await page.getByRole('button',{name:'Add PC'}).click();await page.getByLabel('PC ID').fill('new-host');await page.getByLabel('Display name').fill('New host');await page.getByLabel('SSH host').fill('192.0.2.9');await page.route('**/api/v1/pcs',route=>route.fulfill({status:409,contentType:'application/json',body:JSON.stringify({error:{code:'conflict',message:'PC already exists'}})}));await page.getByRole('button',{name:'Save PC',exact:true}).click();await expect(page.getByRole('dialog').getByRole('alert')).toContainText('PC already exists');await expect(page.getByLabel('Display name')).toHaveValue('New host');await page.keyboard.press('Escape');
+ await page.getByRole('button',{name:'Add PC'}).click();await page.getByLabel('Display name').fill('New host');await page.getByLabel('SSH host').fill('192.0.2.9');await page.route('**/api/v1/pcs',route=>route.fulfill({status:409,contentType:'application/json',body:JSON.stringify({error:{code:'conflict',message:'PC already exists'}})}));await page.getByRole('button',{name:'Save PC',exact:true}).click();await expect(page.getByRole('dialog').getByRole('alert')).toContainText('PC already exists');await expect(page.getByLabel('Display name')).toHaveValue('New host');await page.keyboard.press('Escape');
 });
 test('failed login clears submitted password and remains on the sign-in screen',async({page})=>{
  await fixture(page,'standalone');await page.route('**/api/v1/auth/login',route=>route.fulfill({status:401,contentType:'application/json',body:JSON.stringify({error:{code:'invalid_credentials',message:'Password was not accepted'}})}));await page.getByLabel('Password',{exact:true}).fill('invalid-test-password');await page.getByRole('button',{name:'Sign in',exact:true}).click();await expect(page.getByRole('alert')).toContainText('Password was not accepted');await expect(page.getByLabel('Password',{exact:true})).toHaveValue('');await expect(page.getByRole('button',{name:'Sign in',exact:true})).toBeEnabled();
@@ -206,4 +207,96 @@ test('confirmed inactive service labels known stopped container states without a
 });
 test('offline stopped observation keeps last-known prefix without suggesting a live confirmation',async({page})=>{
  await fixture(page);await page.route('**/api/v1/pcs/desk/status',route=>route.fulfill({contentType:'application/json',body:JSON.stringify({status:{systemd_state:'inactive',container_state:'missing',recovery_pending:false},capabilities:{ready:true},availability:'offline',observed_at:1})}));await page.getByRole('button',{name:'Refresh',exact:true}).click();await expect(page.getByText('Last known service: stopped',{exact:true})).toBeVisible();await expect(page.getByText('Service: stopped',{exact:true})).toHaveCount(0);await expect(page.getByText('Service state and observed revisions are last known;', {exact:false})).toBeVisible();
+});
+
+test('new PC onboarding uses the server identity without asking for an ID',async({page})=>{
+ const calls=await fixture(page);
+ await page.getByRole('button',{name:'Add PC',exact:true}).click();
+ await expect(page.getByLabel('PC ID',{exact:true})).toHaveCount(0);
+ await expect(page.getByLabel('Display name')).toBeFocused();
+ await page.getByLabel('Display name').fill('New desktop');
+ await page.getByLabel('SSH host').fill('desktop.example.test');
+ await page.getByRole('button',{name:'Save PC',exact:true}).click();
+ const created=calls.find(c=>c.endpoint==='pcs'&&c.method==='POST');
+ expect(created.body).toEqual({display_name:'New desktop',ssh_host:'desktop.example.test',ssh_port:22,ssh_user:'wolf-manager'});
+ await expect(page.getByRole('button',{name:'New desktop',exact:true})).toHaveAttribute('aria-pressed','true');
+});
+
+test('SSH onboarding imports a chosen identity without generating or retaining private input',async({page})=>{
+ const calls=await fixture(page);
+ await page.route('**/api/v1/pcs/desk/ssh/identity',async route=>{
+  if(route.request().method()==='GET')return route.fulfill({contentType:'application/json',body:JSON.stringify({configured:false,public_key:null})});
+  return route.fulfill({contentType:'application/json',body:JSON.stringify({public_key:'ssh-ed25519 AAAAIMPORTED fixture-only'})});
+ });
+ await page.getByRole('button',{name:'SSH setup',exact:true}).click();
+ await expect(page.getByRole('button',{name:'Generate key',exact:true})).toBeVisible();
+ expect(calls.some(c=>c.endpoint.endsWith('/ssh/public-key'))).toBe(false);
+ await page.getByRole('button',{name:'Import existing key',exact:true}).click();
+ await page.getByLabel('Private key (OpenSSH)',{exact:true}).fill('synthetic-private-key-not-valid');
+ await page.getByLabel('Public key (optional)',{exact:true}).fill('ssh-ed25519 AAAAIMPORTED fixture-only');
+ await page.getByRole('button',{name:'Import key',exact:true}).click();
+ await expect(page.getByRole('dialog').getByText('ssh-ed25519 AAAAIMPORTED fixture-only',{exact:true})).toBeVisible();
+ await expect(page.getByLabel('Private key (OpenSSH)',{exact:true})).toHaveCount(0);
+ expect(await page.evaluate(()=>localStorage.length+sessionStorage.length)).toBe(0);
+ await expect(page.getByRole('dialog')).not.toContainText('synthetic-private-key-not-valid');
+});
+test('SSH onboarding generates an identity only after the user selects it',async({page})=>{
+ const calls=await fixture(page);
+ await page.route('**/api/v1/pcs/desk/ssh/identity',route=>route.fulfill({contentType:'application/json',body:JSON.stringify({configured:false,public_key:null})}));
+ await page.getByRole('button',{name:'SSH setup',exact:true}).click();
+ expect(calls.some(c=>c.endpoint.endsWith('/ssh/public-key'))).toBe(false);
+ await page.getByRole('button',{name:'Generate key',exact:true}).click();
+ await expect(page.getByRole('dialog').getByText('ssh-ed25519 AAAATEST fixture-only',{exact:true})).toBeVisible();
+ expect(calls.filter(c=>c.endpoint.endsWith('/ssh/public-key'))).toHaveLength(1);
+});
+
+test('SSH key generation blocks a competing import choice until it finishes',async({page})=>{
+ await fixture(page);
+ await page.route('**/api/v1/pcs/desk/ssh/identity',route=>route.fulfill({contentType:'application/json',body:JSON.stringify({configured:false,public_key:null})}));
+ let release; const pending=new Promise(resolve=>{release=resolve;});
+ await page.route('**/api/v1/pcs/desk/ssh/public-key',async route=>{await pending;return route.fulfill({contentType:'application/json',body:JSON.stringify({public_key:'ssh-ed25519 AAAATEST fixture-only'})});});
+ await page.getByRole('button',{name:'SSH setup',exact:true}).click();
+ await page.getByRole('button',{name:'Generate key',exact:true}).click();
+ await expect(page.getByRole('button',{name:'Import existing key',exact:true})).toBeDisabled();
+ release();
+ await expect(page.getByRole('dialog').getByText('ssh-ed25519 AAAATEST fixture-only',{exact:true})).toBeVisible();
+});
+
+test('rejected SSH import clears private input and remains usable on narrow screens',async({page})=>{
+ await page.setViewportSize({width:390,height:844});
+ await fixture(page);
+ await page.route('**/api/v1/pcs/desk/ssh/identity',route=>route.fulfill({status:route.request().method()==='GET'?200:400,contentType:'application/json',body:JSON.stringify(route.request().method()==='GET'?{configured:false,public_key:null}:{error:{code:'validation_failed',message:'Invalid key'}})}));
+ await page.getByRole('button',{name:'Add PC',exact:true}).click();
+ await expect(page.getByLabel('PC ID',{exact:true})).toHaveCount(0);
+ await fs.mkdir('_tmp/internal-identities-ui',{recursive:true});
+ await page.screenshot({path:'_tmp/internal-identities-ui/add-pc-390.png',fullPage:true});
+ await page.keyboard.press('Escape');
+ await page.getByRole('button',{name:'SSH setup',exact:true}).click();
+ await page.getByRole('button',{name:'Import existing key',exact:true}).click();
+ await page.screenshot({path:'_tmp/internal-identities-ui/import-key-390.png',fullPage:true});
+ await page.getByLabel('Private key (OpenSSH)',{exact:true}).fill('synthetic-private-input');
+ await page.getByRole('button',{name:'Import key',exact:true}).click();
+ await expect(page.getByRole('dialog').getByRole('alert')).toContainText('Invalid key');
+ await expect(page.getByLabel('Private key (OpenSSH)',{exact:true})).toHaveValue('');
+ expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+ await page.getByLabel('Private key (OpenSSH)',{exact:true}).fill('synthetic-cancelled-input');
+ const handle=await page.getByLabel('Private key (OpenSSH)',{exact:true}).elementHandle();
+ await page.keyboard.press('Escape');
+ await expect(page.getByRole('dialog')).toHaveCount(0);
+ expect(await handle.evaluate(input=>input.value)).toBe('');
+ expect(await page.evaluate(()=>localStorage.length+sessionStorage.length)).toBe(0);
+});
+
+test('SSH host enrollment waits for the chosen identity instead of blocking future setup',async({page})=>{
+ const calls=await fixture(page);
+ await page.route('**/api/v1/pcs/desk/ssh/identity',route=>route.fulfill({contentType:'application/json',body:JSON.stringify({configured:false,public_key:null})}));
+ await page.getByRole('button',{name:'SSH setup',exact:true}).click();
+ await page.getByRole('button',{name:'Probe host key',exact:true}).click();
+ await page.getByRole('checkbox',{name:'I verified this fingerprint independently'}).check();
+ await expect(page.getByRole('button',{name:'Trust fingerprint',exact:true})).toBeDisabled();
+ expect(calls.some(c=>c.endpoint.endsWith('/ssh/enroll'))).toBe(false);
+ await page.getByRole('button',{name:'Generate key',exact:true}).click();
+ await expect(page.getByRole('button',{name:'Trust fingerprint',exact:true})).toBeEnabled();
+ await page.getByRole('button',{name:'Trust fingerprint',exact:true}).click();
+ expect(calls.filter(c=>c.endpoint.endsWith('/ssh/enroll'))).toHaveLength(1);
 });
