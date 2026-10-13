@@ -102,7 +102,7 @@ impl Api {
             self.get("/api/v1/auth/session").await["authenticated"],
             true
         );
-        let refused = self.client.post(format!("{}/api/v1/pcs", self.origin)).header("cookie", &self.cookie).header("origin", &self.origin).header("x-wolf-csrf", uuid::Uuid::new_v4().to_string()).json(&json!({"pc_id":"refused-pc","display_name":"Refused PC","ssh_host":"127.0.0.1","ssh_port":22,"ssh_user":"wolf-manager"})).send().await.unwrap();
+        let refused = self.client.post(format!("{}/api/v1/pcs", self.origin)).header("cookie", &self.cookie).header("origin", &self.origin).header("x-wolf-csrf", uuid::Uuid::new_v4().to_string()).json(&json!({"display_name":"Refused PC","ssh_host":"127.0.0.1","ssh_port":22,"ssh_user":"wolf-manager"})).send().await.unwrap();
         assert_eq!(
             refused.status(),
             StatusCode::FORBIDDEN,

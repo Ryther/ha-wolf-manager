@@ -196,8 +196,11 @@ fn inventory(root: &DataRoot) -> Result<Vec<String>, SafeError> {
     Ok(files)
 }
 fn inventory_keys(root: &DataRoot, files: &mut Vec<String>) -> Result<(), SafeError> {
-    for entry in std::fs::read_dir(root.path("keys")).map_err(internal)? {
-        if files.len() > 10002 {
+    for (index, entry) in std::fs::read_dir(root.path("keys"))
+        .map_err(internal)?
+        .enumerate()
+    {
+        if index >= 10000 || files.len() > 10002 {
             return Err(SafeError::new("payload_too_large"));
         }
         let entry = entry.map_err(internal)?;
@@ -208,6 +211,17 @@ fn inventory_keys(root: &DataRoot, files: &mut Vec<String>) -> Result<(), SafeEr
             .map_err(internal)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(internal)?;
+        // An interrupted initial identity write may leave only its protected directory.
+        // Accept it solely for a registered PC with no recorded identity or enrollment.
+        if children.is_empty() {
+            let unconfigured: bool = readonly(root)?.query_row(
+                "SELECT EXISTS(SELECT 1 FROM pcs WHERE pc_id=?1 AND enrolled_public_key IS NULL AND host_key_algorithm IS NULL AND host_key_public IS NULL AND host_key_fingerprint IS NULL)",
+                [id.as_str()], |row| row.get(0)).map_err(internal)?;
+            if !unconfigured {
+                return Err(SafeError::validation());
+            }
+            continue;
+        }
         if children.len() != 1 || children[0].file_name() != "id_ed25519" {
             return Err(SafeError::validation());
         }

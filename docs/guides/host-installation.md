@@ -15,6 +15,12 @@ Before installing, record the existing Wolf configuration, pairings, custom apps
 
 Download the host archive for your architecture from a verified release. Check the archive's SHA256 against trusted release metadata before extracting it. Keep the executable and installer in a root-owned, non-writable location. No command below downloads code or modifies a live host without an explicit apply/activate step.
 
+## Register the PC and copy its setup values
+
+In the manager choose **Add PC**, enter **Display name**, **SSH host**, **SSH port** and **SSH user**, then **Save PC**. The manager generates the immutable technical identifier internally; there is no PC ID field to fill in. Open **SSH setup** and copy the read-only **Host setup values**. Use its generated `pc_id` in the host policy and catalog configuration, and the same identifier in scoped MQTT ACLs. Existing manager records retain their IDs. Do not invent a replacement ID for an already registered PC.
+
+The host setup values do not install or discover your host configuration. A local administrator still supplies the actual file mappings and reviews the installation plan.
+
 ## Build the policy from your real mappings
 
 Copy [host-policy.example.json](https://github.com/Ryther/ha-wolf-manager/blob/main/examples/host/host-policy.example.json) to a root-owned `0600` regular file, for example `/root/wolf-policy.json`. It is a **template**, not a ready-to-run hardware configuration. Replace image placeholders with verified Wolf and Steam runner images, UID/GID with the actual Steam account, and every path with its existing authorized mapping. `steam_runner` is the Wolf runner template: supply the image and any GPU/runtime settings needed by your known-working deployment. The toolkit injects authorized library/userdata/Proton mounts and ownership labels; it cannot infer your encoder or runner's hardware requirements.
@@ -25,9 +31,15 @@ Keep `proton: null` unless you have an existing Proton-CachyOS directory. To gra
 
 Use `--mode adopt` for existing Wolf/Compose configuration. Adoption preserves those files. Install mode produces defaults only for absent configuration/Compose files; it still requires initialized, authorized Steam paths. Review the complete plan rather than assuming absent-only creation is sufficient for your PC.
 
-## Generate the manager's restricted SSH key
+## Generate or import the manager's restricted SSH key
 
-In the manager, choose **Add PC** with the policy's PC ID, then **SSH setup**. Opening setup generates a per-PC Ed25519 key; only its public key is shown. Copy that public key to a protected root-owned file on the PC, such as `/root/wolf-manager.pub`. The private key stays in the manager's protected data and must be included in its backups.
+Opening **SSH setup** checks whether an identity already exists; it does not create one automatically. Choose **Generate key** for a new per-PC Ed25519 identity, or **Import existing key** to use an existing OpenSSH Ed25519 private key. Enter **Private key (OpenSSH)** and optionally **Public key (optional)**, then choose **Import key**. A supplied public key must match; a mismatch is refused. After setup, **Configured SSH key** shows only the public identity. A public key alone cannot authenticate the manager to the PC.
+
+Import through the authenticated manager interface only, never a chat, issue or log. The import accepts unencrypted OpenSSH Ed25519 keys: encrypted keys and other formats are refused. It supports initial setup, not identity rotation. An existing different identity cannot be overwritten. Reimporting the same key is idempotent only after the protected-state checks succeed.
+
+The private key is submitted to the same-origin authenticated, CSRF-protected API and stored in the manager's protected key directory (`0700`, key file `0600`). It is not returned, logged or kept in browser persistent storage. Back up that manager state as secret material. The runtime does not use an SSH agent or retain a passphrase.
+
+Copy only the resulting public key to a protected root-owned file on the PC, such as `/root/wolf-manager.pub`. The host installer receives the public key, never the private key.
 
 For a separately managed RPC client, a local administrator can create a separate identity:
 
@@ -36,7 +48,7 @@ umask 077
 ssh-keygen -t ed25519 -f ./wolf-rpc-key
 ```
 
-Protect its private key and use a passphrase for interactive custody. Only the `.pub` file is supplied to the installer. The browser does not import this private key; do not replace the manager's stored identity by editing its data directory. Each repeated `--authorized-key` grants another identity the same restricted RPC rights, so install only identities you intend to authorize.
+Protect its private key and use a passphrase for interactive custody. Only the `.pub` file is supplied to the installer. This separate interactive client is distinct from a manager-imported key, which must be unencrypted for unattended operation. Do not replace the manager's stored identity by editing its data directory. Each repeated `--authorized-key` grants another identity the same restricted RPC rights, so install only identities you intend to authorize.
 
 ## Preview, apply and activate
 
@@ -87,7 +99,7 @@ never infer successful installation from a running old process alone.
 
 ## Configure the catalog publisher
 
-Before preview, create a broker configuration from [broker.example.json](https://github.com/Ryther/ha-wolf-manager/blob/main/examples/host/broker.example.json). Replace host, PC name and protected credential-file paths. Its `username_file` and `password_file` contain separate broker credentials; never copy the manager's broad broker identity. The catalog configuration and files must meet the host's protected-file checks. The config runs under the Steam UID; give that UID ownership, mode `0600`, and a private directory. Set the policy's `broker_secret_file` to `/etc/wolf-manager/catalog.json` (the installer requires a destination under `/etc/wolf-manager/`) and pass the prepared source file using `--broker-config /root/wolf-broker.json` during preview. The source preview input is root owned; the installed catalog file is owned by the Steam identity.
+Before preview, create a broker configuration from [broker.example.json](https://github.com/Ryther/ha-wolf-manager/blob/main/examples/host/broker.example.json). Replace the broker host and protected credential-file paths, and set `pc_id` to the generated value shown in **SSH setup**. Its `username_file` and `password_file` contain separate broker credentials; never copy the manager's broad broker identity. The catalog configuration and files must meet the host's protected-file checks. The config runs under the Steam UID; give that UID ownership, mode `0600`, and a private directory. Set the policy's `broker_secret_file` to `/etc/wolf-manager/catalog.json` (the installer requires a destination under `/etc/wolf-manager/`) and pass the prepared source file using `--broker-config /root/wolf-broker.json` during preview. The source preview input is root owned; the installed catalog file is owned by the Steam identity.
 
 For a private broker CA, supply an absolute `ca_file` and keep `tls: true`. Omit the CA or use null for publicly trusted roots. The host publisher uses MQTT v3; the manager's command adapter uses MQTT v5. The broker must support both. Keep catalog state durable so generation numbers and owned discovery cleanup survive restarts.
 

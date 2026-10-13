@@ -4,7 +4,7 @@
 
 ## Collect a bounded snapshot
 
-Record the PC ID, operation ID, **Observed at** timestamp, availability and Desired/Staged/Running revisions. In **Diagnostics**, choose **Log lines** (1–500) and **Read logs**. Output is a sanitized bounded snapshot, not a continuous stream; it may explicitly report truncation. A snapshot can contain only the available recent logs and cannot prove the absence of an earlier error.
+Record the generated technical PC ID from **SSH setup → Host setup values**, operation ID, **Observed at** timestamp, availability and Desired/Staged/Running revisions. In **Diagnostics**, choose **Log lines** (1–500) and **Read logs**. Output is a sanitized bounded snapshot, not a continuous stream; it may explicitly report truncation. A snapshot can contain only the available recent logs and cannot prove the absence of an earlier error.
 
 On the PC, a local administrator can inspect the actual units and container selected in its policy:
 
@@ -21,7 +21,8 @@ Replace `wolf.service` and `wolf` if your policy uses other names. Preserve usef
 | --- | --- |
 | Manager cannot start | Inspect container exit output; verify mode, exact HTTPS origin, protected file owner/mode, MQTT configuration and certificate/key pair. Scratch images have no shell to exec into. |
 | TLS or sign-in fails | Use the configured HTTPS origin and a trusted certificate. Check clock and proxy peer configuration. Do not bypass CSRF or replace Ingress with caller-supplied headers. |
-| SSH probe works but connection test fails | Independently verify and enroll the exact fingerprint; check the generated public key is installed for the restricted account, PC ID matches policy and SSH route/firewall is reachable. |
+| SSH probe works but connection test fails | Independently verify and enroll the exact fingerprint; check the configured generated/imported public key is installed for the restricted account, the generated PC ID matches policy and SSH route/firewall is reachable. |
+| SSH key import fails | Use an unencrypted OpenSSH Ed25519 private key, optionally its matching public key. Public-only, encrypted, unsupported or mismatched keys are refused. An existing different identity cannot be overwritten; do not delete protected state to force rotation. Never include the key in an error report. |
 | PC shows offline with old running state | Treat state as historical; compare observation time and current reachability. Refresh and inspect the corresponding operation. |
 | Games missing | Check catalog unit, broker ACLs/topic roots, Steam library paths, complete-generation publication and host availability. Failed scans retain earlier complete data. |
 | Start fails when registry is unavailable | Cached image fallback works only if the selected image already exists locally. A failed pull with no cache fails startup; do not change the image reference to hide that failure. |
@@ -91,3 +92,9 @@ For a host installation rollback, use the retained reviewed plan and guarded
 There is no general automatic uninstall/Steam restore when the manager is
 removed. If rollback refuses changed identities or files, retain the evidence
 and investigate instead of force-removing policy, configuration or backups.
+
+A recorded SSH identity whose protected private file is missing or no longer
+matches is refused by inspection, generation and import. Restore the matching
+manager backup; creating another key is not recovery. For a new PC, choose or
+import its client key before trusting the host fingerprint. An early enrollment
+attempt is refused without recording host trust.

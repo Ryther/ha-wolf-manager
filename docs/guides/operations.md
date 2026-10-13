@@ -4,7 +4,9 @@
 
 ## Register and observe a PC
 
-Choose **Add PC**, enter **PC ID**, **Display name**, **SSH host**, **SSH port**, and **SSH user**, then **Save PC**. Use the same PC ID as the host policy and catalog publisher. IDs are immutable lowercase identifiers (letters, digits, `_` and `-`, up to 64 characters). Use a distinct ID for each PC. Complete **SSH setup** as described in [host installation](host-installation.md).
+Choose **Add PC**, enter **Display name**, **SSH host**, **SSH port** and **SSH user**, then **Save PC**. The manager assigns a stable internal identifier; you do not choose or change it. Changing the display name or SSH endpoint does not replace that identity. Existing registered PCs keep their identifiers.
+
+Open **SSH setup** to obtain the read-only **Host setup values** and choose **Generate key** or **Import existing key**. Copy the generated `pc_id` into the host policy, catalog configuration and scoped broker ACLs; it connects the manager record to that separately installed toolkit. These are setup values, not automatic host installation. Complete the reviewed installation and fingerprint enrollment described in [host installation](host-installation.md).
 
 **Refresh** reads host status and operation history. Check **Host availability** and **Observed at** together. An offline or unknown host shows **Last known service** and last-known revisions. Those values describe a previous observation, not its current running state. Different PCs can progress independently; mutations on one PC are serialized.
 

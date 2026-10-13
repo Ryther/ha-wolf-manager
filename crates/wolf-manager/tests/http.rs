@@ -156,7 +156,7 @@ async fn actual_http_bootstrap_session_csrf_and_logout() {
     let result = decoded(response).await;
     let csrf = result["csrf_token"].as_str().unwrap();
     assert!(!result.to_string().contains("session_token"));
-    let body = serde_json::json!({"pc_id":"pc","display_name":"PC","ssh_host":"127.0.0.1","ssh_port":22,"ssh_user":"wolf-manager"});
+    let body = serde_json::json!({"display_name":"PC","ssh_host":"127.0.0.1","ssh_port":22,"ssh_user":"wolf-manager"});
     assert_eq!(
         app.clone()
             .oneshot(json_request(
@@ -323,7 +323,7 @@ async fn actual_http_ingress_nonce_origin_and_prefix() {
         .to_owned();
     let mut mutation = json_request(
         "/api/v1/pcs",
-        serde_json::json!({"pc_id":"pc","display_name":"PC","ssh_host":"127.0.0.1","ssh_port":22,"ssh_user":"wolf-manager"}),
+        serde_json::json!({"display_name":"PC","ssh_host":"127.0.0.1","ssh_port":22,"ssh_user":"wolf-manager"}),
         "",
         &csrf,
         "https://ha.example.test",
@@ -423,4 +423,168 @@ async fn backend_image_policy_allows_only_self_and_the_canonical_steam_cover_ori
         image_sources.split_whitespace().collect::<Vec<_>>(),
         vec!["'self'", cover_origin.as_str()]
     );
+}
+
+#[tokio::test]
+async fn pc_creation_assigns_distinct_durable_internal_ids_and_refuses_caller_ids() {
+    let t = tempdir().unwrap();
+    let root = t.path().join("data");
+    let app = router(AppState::new(
+        Store::open(&root, 0).unwrap(),
+        root.clone(),
+        Deployment::Ingress,
+        TransportPolicy::Ingress,
+    ));
+    let mut issue = request("/api/v1/auth/csrf", "172.30.32.2:1234");
+    issue
+        .headers_mut()
+        .insert("x-wolf-origin", "https://ha.example.test".parse().unwrap());
+    let csrf = decoded(app.clone().oneshot(issue).await.unwrap()).await["csrf_token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let input = serde_json::json!({"display_name":"Same name","ssh_host":"pc.example.test","ssh_port":22,"ssh_user":"wolf-manager"});
+    let mut ids = Vec::new();
+    for _ in 0..2 {
+        let mut req = json_request(
+            "/api/v1/pcs",
+            input.clone(),
+            "",
+            &csrf,
+            "https://ha.example.test",
+        );
+        req.extensions_mut().insert(ConnectInfo(
+            "172.30.32.2:1234".parse::<SocketAddr>().unwrap(),
+        ));
+        let response = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let pc = decoded(response).await;
+        let id = pc["pc_id"].as_str().unwrap().to_owned();
+        wolf_core::PcId::new(&id).unwrap();
+        assert_ne!(id, "Same name");
+        ids.push(id);
+    }
+    assert_ne!(ids[0], ids[1]);
+    let mut caller = input;
+    caller["pc_id"] = serde_json::json!("caller-controlled");
+    let mut req = json_request("/api/v1/pcs", caller, "", &csrf, "https://ha.example.test");
+    req.extensions_mut().insert(ConnectInfo(
+        "172.30.32.2:1234".parse::<SocketAddr>().unwrap(),
+    ));
+    assert_eq!(
+        app.clone().oneshot(req).await.unwrap().status(),
+        StatusCode::BAD_REQUEST
+    );
+    drop(app);
+    let reopened = Store::open(&root, 1).unwrap();
+    let persisted = reopened.pcs().unwrap();
+    assert_eq!(persisted.len(), 2);
+    assert!(
+        ids.iter()
+            .all(|id| persisted.iter().any(|pc| pc.pc_id.as_str() == id))
+    );
+}
+
+#[tokio::test]
+async fn ssh_identity_import_requires_origin_csrf_and_returns_only_public_material() {
+    let t = tempdir().unwrap();
+    let root = t.path().join("data");
+    let mut store = Store::open(&root, 0).unwrap();
+    store
+        .add_pc(
+            ha_wolf_manager::domain::PcInput {
+                pc_id: wolf_core::PcId::new("fixture").unwrap(),
+                display_name: "Fixture".into(),
+                ssh_host: "pc.example.test".into(),
+                ssh_port: 22,
+                ssh_user: "wolf-manager".into(),
+            },
+            0,
+        )
+        .unwrap();
+    let app = router(AppState::new(
+        store,
+        root.clone(),
+        Deployment::Ingress,
+        TransportPolicy::Ingress,
+    ));
+    let mut issue = request("/api/v1/auth/csrf", "172.30.32.2:1234");
+    issue
+        .headers_mut()
+        .insert("x-wolf-origin", "https://ha.example.test".parse().unwrap());
+    let csrf = decoded(app.clone().oneshot(issue).await.unwrap()).await["csrf_token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let key = russh::keys::PrivateKey::random(
+        &mut russh::keys::key::safe_rng(),
+        russh::keys::Algorithm::Ed25519,
+    )
+    .unwrap();
+    let private = key
+        .to_openssh(russh::keys::ssh_key::LineEnding::LF)
+        .unwrap();
+    let public = key.public_key().to_openssh().unwrap();
+    let body = serde_json::json!({"private_key":private.as_str(),"public_key":public});
+    let uri = "/api/v1/pcs/fixture/ssh/identity";
+    for (origin, token, peer) in [
+        ("https://foreign.test", csrf.as_str(), "172.30.32.2:1234"),
+        (
+            "https://ha.example.test",
+            "invalid-csrf",
+            "172.30.32.2:1234",
+        ),
+        ("https://ha.example.test", csrf.as_str(), "192.0.2.8:1234"),
+    ] {
+        let mut req = json_request(uri, body.clone(), "", token, origin);
+        req.extensions_mut()
+            .insert(ConnectInfo(peer.parse::<SocketAddr>().unwrap()));
+        assert_eq!(
+            app.clone().oneshot(req).await.unwrap().status(),
+            StatusCode::FORBIDDEN
+        );
+        assert!(!root.join("keys/fixture/id_ed25519").exists());
+    }
+    let mut unknown = body.clone();
+    unknown["path"] = serde_json::json!("/tmp/untrusted-key");
+    let mut req = json_request(uri, unknown, "", &csrf, "https://ha.example.test");
+    req.extensions_mut().insert(ConnectInfo(
+        "172.30.32.2:1234".parse::<SocketAddr>().unwrap(),
+    ));
+    assert_eq!(
+        app.clone().oneshot(req).await.unwrap().status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert!(!root.join("keys/fixture/id_ed25519").exists());
+    let before = decoded(
+        app.clone()
+            .oneshot(request(uri, "172.30.32.2:1234"))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(
+        before,
+        serde_json::json!({"configured":false,"public_key":null})
+    );
+    assert!(!root.join("keys/fixture/id_ed25519").exists());
+    let mut req = json_request(uri, body, "", &csrf, "https://ha.example.test");
+    req.extensions_mut().insert(ConnectInfo(
+        "172.30.32.2:1234".parse::<SocketAddr>().unwrap(),
+    ));
+    let response = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let imported = decoded(response).await;
+    assert_eq!(
+        imported,
+        serde_json::json!({"configured":true,"public_key":public})
+    );
+    assert!(!imported.to_string().contains("PRIVATE KEY"));
+    let after = decoded(app.oneshot(request(uri, "172.30.32.2:1234")).await.unwrap()).await;
+    assert_eq!(after, imported);
+    let stored = russh::keys::PrivateKey::from_openssh(
+        fs::read(root.join("keys/fixture/id_ed25519")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(stored.public_key().key_data(), key.public_key().key_data());
 }

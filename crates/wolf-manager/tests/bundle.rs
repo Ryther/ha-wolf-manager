@@ -269,3 +269,133 @@ fn restored_inflight_child_remains_uncertain_and_cannot_be_dispatched_again() {
     assert!(restored.begin_dispatch(request.request_id, 9).is_err());
     assert!(restored.active_mutation(&pc).unwrap().is_some());
 }
+
+#[test]
+fn inspecting_unconfigured_identity_does_not_break_offline_backup() {
+    let temp = tempdir().unwrap();
+    let data = temp.path().join("data");
+    let mut store = Store::open(&data, 0).unwrap();
+    let pc = PcId::new("unconfigured").unwrap();
+    store
+        .add_pc(
+            PcInput {
+                pc_id: pc.clone(),
+                display_name: "PC".into(),
+                ssh_host: "localhost".into(),
+                ssh_port: 22,
+                ssh_user: "wolf-manager".into(),
+            },
+            1,
+        )
+        .unwrap();
+    drop(store);
+    assert_eq!(ssh::identity_public_key(&data, &pc).unwrap(), None);
+    assert!(
+        !data.join("keys").exists(),
+        "cancelled setup must not leave directories"
+    );
+    let backup = temp.path().join("bundle");
+    bundle::backup(&data, &backup).unwrap();
+    bundle::preview(&backup).unwrap();
+}
+
+#[test]
+fn interrupted_anonymous_identity_creation_keeps_backup_usable() {
+    use std::io::Write;
+    let temp = tempdir().unwrap();
+    let data = temp.path().join("data");
+    let mut store = Store::open(&data, 0).unwrap();
+    let pc = PcId::new("unconfigured").unwrap();
+    store
+        .add_pc(
+            PcInput {
+                pc_id: pc.clone(),
+                display_name: "PC".into(),
+                ssh_host: "localhost".into(),
+                ssh_port: 22,
+                ssh_user: "wolf-manager".into(),
+            },
+            1,
+        )
+        .unwrap();
+    drop(store);
+    fs::create_dir_all(data.join("keys/unconfigured")).unwrap();
+    for dir in [data.join("keys"), data.join("keys/unconfigured")] {
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let fd = rustix::fs::open(
+        data.join("keys/unconfigured"),
+        rustix::fs::OFlags::WRONLY | rustix::fs::OFlags::TMPFILE | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::from_raw_mode(0o600),
+    )
+    .unwrap();
+    let mut staging = fs::File::from(fd);
+    staging
+        .write_all(b"partial private material from interrupted write")
+        .unwrap();
+    staging.sync_all().unwrap();
+    assert_eq!(
+        fs::read_dir(data.join("keys/unconfigured"))
+            .unwrap()
+            .count(),
+        0
+    );
+    drop(staging);
+    let backup = temp.path().join("bundle");
+    bundle::backup(&data, &backup).unwrap();
+    bundle::preview(&backup).unwrap();
+    let restored = temp.path().join("restored");
+    bundle::restore(&backup, &restored).unwrap();
+    assert_eq!(ssh::identity_public_key(&restored, &pc).unwrap(), None);
+    let public = ssh::ensure_identity(&data, &pc).unwrap();
+    assert!(public.starts_with("ssh-ed25519 "));
+    assert_eq!(
+        fs::read_dir(data.join("keys/unconfigured"))
+            .unwrap()
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn empty_unknown_or_enrolled_identity_directories_remain_refused() {
+    for known in [false, true] {
+        let temp = tempdir().unwrap();
+        let data = temp.path().join("data");
+        let mut store = Store::open(&data, 0).unwrap();
+        if known {
+            store
+                .add_pc(
+                    PcInput {
+                        pc_id: PcId::new("empty").unwrap(),
+                        display_name: "PC".into(),
+                        ssh_host: "localhost".into(),
+                        ssh_port: 22,
+                        ssh_user: "wolf-manager".into(),
+                    },
+                    1,
+                )
+                .unwrap();
+        }
+        drop(store);
+        if known {
+            rusqlite::Connection::open(data.join("manager.sqlite3"))
+                .unwrap()
+                .execute(
+                    "UPDATE pcs SET enrolled_public_key='missing-required-key'",
+                    [],
+                )
+                .unwrap();
+        }
+        fs::create_dir_all(data.join("keys/empty")).unwrap();
+        for dir in [data.join("keys"), data.join("keys/empty")] {
+            fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let database = fs::read(data.join("manager.sqlite3")).unwrap();
+        let backup = temp.path().join("bundle");
+        assert!(bundle::backup(&data, &backup).is_err());
+        assert!(!backup.exists());
+        assert_eq!(fs::read(data.join("manager.sqlite3")).unwrap(), database);
+        assert_eq!(fs::read_dir(data.join("keys/empty")).unwrap().count(), 0);
+    }
+}

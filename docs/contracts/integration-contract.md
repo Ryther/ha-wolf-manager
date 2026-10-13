@@ -4,7 +4,7 @@ External user-owned broker; add-on gets supported Supervisor service data in Rus
 
 ## SSH enrollment
 
-Manager probe does handshake only, returnsalgorithm+SHA256fingerprint+probeUUID+5minexpiry withouttrust or privilegedRPC. Enrollment echoesmatchingprobe/fingerprint/endpoint; storehostkeypublic bytes andfingerprint atomically. Subsequentmismatch refuses beforeauthcommand; explicitrotation repeatsprobe/confirm andauditrecord. PrivateEd25519key/data/keys/<pcid>/id_ed255190600 generatedperPC; GETpublickeyonly. Rootpolicy/authorizedkeys/operationlimits are runtimecontract authority; JSONcommandalwayswolf-manager-rpc-v1, no constructed shellsyntax.
+Manager probe does handshake only, returnsalgorithm+SHA256fingerprint+probeUUID+5minexpiry withouttrust or privilegedRPC. Enrollment echoesmatchingprobe/fingerprint/endpoint; storehostkeypublic bytes andfingerprint atomically. Subsequentmismatch refuses beforeauthcommand; explicitrotation repeatsprobe/confirm andauditrecord. A per-PC Ed25519 identity is either explicitly generated or imported through the authenticated, Origin/CSRF-protected initial setup. The fixed private path is `/data/keys/<pcid>/id_ed25519`, mode `0600`. Read-only identity inspection does not generate keys. Import accepts an unencrypted OpenSSH private key and optional matching public key; private material is never returned. Different existing identities, completed host enrollment and active/unresolved operations prevent import; this is not key rotation. Rootpolicy/authorizedkeys/operationlimits are runtimecontract authority; JSONcommandalwayswolf-manager-rpc-v1, no constructed shellsyntax.
 
 ## Exact MQTT topic table
 

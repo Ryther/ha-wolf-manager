@@ -118,8 +118,9 @@ async fn health(dut: &docker::Container) {
     .await
     .expect("native exec health marker must become ready");
 }
-fn protected_state(root: &Path) -> String {
+fn protected_state(root: &Path, pc_id: &wolf_core::PcId) -> String {
     let mount = docker::mount(&root.join("data"), "/data", true);
+    let key_path = format!("/data/keys/{pc_id}/id_ed25519");
     docker::checked(&[
         "run",
         "--rm",
@@ -133,7 +134,9 @@ fn protected_state(root: &Path) -> String {
         &mount,
         BROKER,
         "-c",
-        "test \"$(stat -c '%u:%g:%a' /data)\" = '1000:1000:700' && test \"$(stat -c '%u:%g:%a' /data/keys/candidate-pc/id_ed25519)\" = '1000:1000:600' && test \"$(stat -c '%u:%g:%a' /data/manager.sqlite3)\" = '1000:1000:600' && sha256sum /data/keys/candidate-pc/id_ed25519 /data/instance-id",
+        "test \"$(stat -c '%u:%g:%a' /data)\" = '1000:1000:700' && test \"$(stat -c '%u:%g:%a' \"$1\")\" = '1000:1000:600' && test \"$(stat -c '%u:%g:%a' /data/manager.sqlite3)\" = '1000:1000:600' && sha256sum \"$1\" /data/instance-id",
+        "protected-state",
+        &key_path,
     ])
 }
 async fn stop(dut: &docker::Container, observer: &mqtt::Observer, gate: Option<&ssh::Gate>) {
@@ -299,17 +302,43 @@ async fn exact_scratch_native_tls_ssh_mqtt_state_health_and_sigterm() {
         vec![vec!["1000", "1000"]],
         "actual scratch process runs without root"
     );
-    api.post("/api/v1/pcs",json!({"pc_id":"candidate-pc","display_name":"Candidate PC","ssh_host":"127.0.0.1","ssh_port":ssh.port,"ssh_user":"wolf-manager"}),StatusCode::CREATED).await;
-    let public = api.get("/api/v1/pcs/candidate-pc/ssh/public-key").await["public_key"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    ssh.seen.lock().unwrap().authorized =
-        Some(russh::keys::PublicKey::from_openssh(&public).unwrap());
+    let created = api.post("/api/v1/pcs",json!({"display_name":"Candidate PC","ssh_host":"127.0.0.1","ssh_port":ssh.port,"ssh_user":"wolf-manager"}),StatusCode::CREATED).await;
+    let pc_id = wolf_core::PcId::new(created["pc_id"].as_str().unwrap()).unwrap();
+    let identity_path = format!("/api/v1/pcs/{pc_id}/ssh/identity");
+    assert_eq!(
+        api.get(&identity_path).await,
+        json!({"configured":false,"public_key":null}),
+        "read-only identity inspection does not generate a key"
+    );
+    let imported_key = russh::keys::PrivateKey::random(
+        &mut russh::keys::key::safe_rng(),
+        russh::keys::Algorithm::Ed25519,
+    )
+    .unwrap();
+    let private = imported_key
+        .to_openssh(russh::keys::ssh_key::LineEnding::LF)
+        .unwrap();
+    let public = imported_key.public_key().to_openssh().unwrap();
+    let imported = api
+        .post(
+            &identity_path,
+            json!({"private_key":private.as_str(),"public_key":public}),
+            StatusCode::OK,
+        )
+        .await;
+    assert_eq!(imported["configured"], true);
+    let returned_public =
+        russh::keys::PublicKey::from_openssh(imported["public_key"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        returned_public.key_data(),
+        imported_key.public_key().key_data()
+    );
+    assert_eq!(imported["public_key"], public);
+    ssh.seen.lock().unwrap().authorized = Some(returned_public);
     // Probe must return this fixture's independently generated host fingerprint.
     let probe = api
         .post(
-            "/api/v1/pcs/candidate-pc/ssh/probe",
+            &format!("/api/v1/pcs/{pc_id}/ssh/probe"),
             json!({}),
             StatusCode::OK,
         )
@@ -320,14 +349,14 @@ async fn exact_scratch_native_tls_ssh_mqtt_state_health_and_sigterm() {
         "probe cannot execute RPC"
     );
     api.post(
-        "/api/v1/pcs/candidate-pc/ssh/enroll",
+        &format!("/api/v1/pcs/{pc_id}/ssh/enroll"),
         json!({"probe_id":probe["probe_id"],"fingerprint":probe["fingerprint"]}),
         StatusCode::OK,
     )
     .await;
     let operation = api
         .post(
-            "/api/v1/pcs/candidate-pc/ssh/test",
+            &format!("/api/v1/pcs/{pc_id}/ssh/test"),
             json!({}),
             StatusCode::ACCEPTED,
         )
@@ -349,6 +378,7 @@ async fn exact_scratch_native_tls_ssh_mqtt_state_health_and_sigterm() {
     {
         let seen = ssh.seen.lock().unwrap();
         assert!(!seen.requests.is_empty());
+        assert!(seen.requests.iter().all(|request| request.pc_id == pc_id));
         assert_eq!(seen.pty, 0);
         assert!(
             seen.commands
@@ -357,13 +387,13 @@ async fn exact_scratch_native_tls_ssh_mqtt_state_health_and_sigterm() {
         );
     }
     observer.wait("/availability", b"online").await;
-    let identity = protected_state(root);
+    let identity = protected_state(root, &pc_id);
     ssh.gate
         .hold
         .store(true, std::sync::atomic::Ordering::Release);
     let drain_operation = api
         .post(
-            "/api/v1/pcs/candidate-pc/ssh/test",
+            &format!("/api/v1/pcs/{pc_id}/ssh/test"),
             json!({}),
             StatusCode::ACCEPTED,
         )
@@ -417,14 +447,21 @@ async fn exact_scratch_native_tls_ssh_mqtt_state_health_and_sigterm() {
     );
     assert_eq!(
         api.get("/api/v1/pcs").await["pcs"][0]["pc_id"],
-        "candidate-pc"
+        pc_id.as_str()
     );
     assert_eq!(
-        api.get("/api/v1/pcs/candidate-pc/ssh/public-key").await["public_key"],
-        public
+        api.get(&identity_path).await,
+        json!({"configured":true,"public_key":public}),
+        "imported identity survives restart"
     );
     assert_eq!(
-        protected_state(root),
+        api.get(&format!("/api/v1/pcs/{pc_id}/ssh/public-key"))
+            .await["public_key"],
+        public,
+        "legacy public-key lookup does not replace the imported identity"
+    );
+    assert_eq!(
+        protected_state(root, &pc_id),
         identity,
         "native SSH key and instance identity retained byte-for-byte"
     );

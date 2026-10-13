@@ -4,7 +4,7 @@ This file replaces earlier proposal-only schema text. Authority: independent dom
 
 ## Ownership and durable store
 
-Manager owns one local SQLite database /data/manager.sqlite3. Default data directory0700 and files0600; fixed key paths /data/keys/<pc_id>/id_ed25519 and known-host trust beneath the same protected tree. No private-key bytes in SQL, HTTP, MQTT or logs. Catalog/service status are observations, not authority for root policy or desired settings.
+Manager owns one local SQLite database /data/manager.sqlite3. Default data directory0700 and files0600; fixed key paths /data/keys/<pc_id>/id_ed25519 and known-host trust beneath the same protected tree. No private-key bytes in SQL, HTTP responses, MQTT or logs. Initial SSH identity import accepts private bytes only in a bounded authenticated, same-origin CSRF-protected HTTP request; they are persisted solely in the protected key file, never browser persistent storage. Catalog/service status are observations, not authority for root policy or desired settings.
 
 Use integer Unix milliseconds, TEXT canonical JSON, 32-byte BLOB digests and UUID text operation IDs. pcs IDs match [a-z0-9][a-z0-9_-]{0,63}; Steam app IDs are decimal strings; parameter IDs match [A-Za-z0-9_.-]{1,64}. Canonical JSON sorts object keys and emits no insignificant whitespace; SHA256 of validated canonical desired data is the revision. Root policy remains a host-owned file, not a row editable by the browser.
 
