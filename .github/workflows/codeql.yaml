@@ -53,7 +53,7 @@ jobs:
         mkdir -p _tmp/evidence
         python -m scripts.ci.check_subject --bundle _tmp/subject --sha "$CANDIDATE_SHA" > _tmp/evidence/subject-binding.json
       if: inputs.subject_artifact != ''
-    - uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2
+    - uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d
       with:
         languages: rust,javascript-typescript,python,actions
         build-mode: none
