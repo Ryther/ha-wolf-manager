@@ -98,7 +98,7 @@ jobs:
       with:
         name: evidence-image-scan-amd64-${{ inputs.ref || github.sha }}
         path: _tmp/image-amd64
-    - uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2
+    - uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370
       if: inputs.subject_artifact != '' && always() && hashFiles('_tmp/image-amd64/trivy-amd64.sarif') != ''
       with:
         sarif_file: _tmp/image-amd64/trivy-amd64.sarif
@@ -108,7 +108,7 @@ jobs:
       with:
         name: evidence-image-scan-arm64-${{ inputs.ref || github.sha }}
         path: _tmp/image-arm64
-    - uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2
+    - uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370
       if: inputs.subject_artifact != '' && always() && hashFiles('_tmp/image-arm64/trivy-arm64.sarif') != ''
       with:
         sarif_file: _tmp/image-arm64/trivy-arm64.sarif
@@ -118,7 +118,7 @@ jobs:
         name: evidence-codeql-${{ inputs.ref || github.sha }}
         path: _tmp/codeql-report
       if: always()
-    - uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2
+    - uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370
       with:
         sarif_file: _tmp/codeql-report/codeql
         category: candidate-security
